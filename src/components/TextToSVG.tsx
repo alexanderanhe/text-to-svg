@@ -7,8 +7,9 @@ const FONT_URL = "/Inter_18pt-Regular.ttf";
 
 type FontGoogle = [string, string];
 
+type Tool = "pen" | "eraser";
 type Pt = { x: number; y: number };
-type Stroke = { color: string; size: number; points: Pt[] };
+type Stroke = { tool: Tool; color: string; size: number; points: Pt[] };
 
 export default function TextToSVG() {
   // Estado UI
@@ -21,6 +22,7 @@ export default function TextToSVG() {
   const [bg, setBg] = useState<string>("#ffffff");
   const [transparentBG, setTransparentBG] = useState<boolean>(true);
 
+  const [tool, setTool] = useState<Tool>("pen");
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const drawingRef = useRef<Stroke | null>(null);
 
@@ -143,15 +145,24 @@ export default function TextToSVG() {
       y += lineStep;
     }
 
-    // --- DIBUJAR TRAZOS ---
+    // --- TRAZOS ---
     ctx.save();
     strokes.forEach((s) => {
       if (s.points.length < 2) return;
       ctx.beginPath();
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      ctx.strokeStyle = s.color;
       ctx.lineWidth = s.size;
+
+      if (s.tool === "eraser") {
+        // borra (como pintar) sobre el bitmap del canvas
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.strokeStyle = "#000"; // color irrelevante en destination-out
+      } else {
+        ctx.globalCompositeOperation = "source-over";
+        ctx.strokeStyle = s.color;
+      }
+
       ctx.moveTo(s.points[0].x, s.points[0].y);
       for (let i = 1; i < s.points.length; i++) {
         ctx.lineTo(s.points[i].x, s.points[i].y);
@@ -326,49 +337,54 @@ export default function TextToSVG() {
   }
 
   function getCanvasPos(canvas: HTMLCanvasElement, e: React.PointerEvent) {
-  const r = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / r.width;
-  const scaleY = canvas.height / r.height;
-  return { x: (e.clientX - r.left) * scaleX, y: (e.clientY - r.top) * scaleY };
-}
+    const r = canvas.getBoundingClientRect();
+    const sx = canvas.width / r.width;
+    const sy = canvas.height / r.height;
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  }
 
-function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-  const canvas = e.currentTarget;
-  canvas.setPointerCapture?.(e.pointerId);
-  const p = getCanvasPos(canvas, e);
-  const s: Stroke = { color: penColor, size: penSize, points: [p] };
-  drawingRef.current = s;
-  setStrokes((prev) => [...prev, s]);
-}
+  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    const canvas = e.currentTarget;
+    canvas.setPointerCapture?.(e.pointerId);
+    const p = getCanvasPos(canvas, e);
+    const s: Stroke = {
+      tool,
+      color: penColor,
+      size: penSize,
+      points: [p],
+    };
+    drawingRef.current = s;
+    setStrokes(prev => [...prev, s]);
+  }
 
-function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-  const s = drawingRef.current;
-  if (!s) return;
-  const canvas = e.currentTarget;
-  const p = getCanvasPos(canvas, e);
-  const last = s.points[s.points.length - 1];
-  if (!last || last.x !== p.x || last.y !== p.y) {
-    s.points.push(p);
-    // Dibuja incrementalmente el segmento (opcional, para feedback inmediato)
-    const ctx = canvas.getContext("2d");
-    if (ctx && last) {
-      ctx.save();
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.strokeStyle = s.color;
-      ctx.lineWidth = s.size;
-      ctx.beginPath();
-      ctx.moveTo(last.x, last.y);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      ctx.restore();
+  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    const s = drawingRef.current;
+    if (!s) return;
+    const canvas = e.currentTarget;
+    const p = getCanvasPos(canvas, e);
+    const last = s.points[s.points.length - 1];
+    if (!last || last.x !== p.x || last.y !== p.y) {
+      s.points.push(p);
+      // si quieres ver el trazo en vivo sin esperar al repaint, puedes llamar a drawPreview() aquí
+      drawPreview();
     }
   }
-}
 
-function onPointerUp() {
-  drawingRef.current = null;
-}
+  function onPointerUp() {
+    drawingRef.current = null;
+    // repaint final
+    drawPreview();
+  }
+
+  function clearCanvas() {
+    setStrokes([]);   // vacía dibujo a mano
+    drawPreview();
+  }
+
+  function undo() {
+    setStrokes(s => s.slice(0, -1));
+    drawPreview();
+  }
 
 
   return (
@@ -476,6 +492,32 @@ function onPointerUp() {
                 value={penSize}
                 onChange={(e) => setPenSize(+e.target.value || 3)}
               />
+            </div>
+
+            <div className="col-span-4">
+              <Label>Herramienta</Label>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  className={`px-3 py-2 rounded-lg ${tool === "pen" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+                  onClick={() => setTool("pen")}
+                >
+                  Lápiz
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-2 rounded-lg ${tool === "eraser" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+                  onClick={() => setTool("eraser")}
+                >
+                  Borrador
+                </button>
+                <button onClick={clearCanvas} className="px-2 py-1 rounded border">
+                  Limpiar
+                </button>
+                <button onClick={undo} className="px-2 py-1 rounded border">
+                  Undo
+                </button>
+              </div>
             </div>
 
           </div>
