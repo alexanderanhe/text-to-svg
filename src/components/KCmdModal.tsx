@@ -207,7 +207,7 @@ export default function KCmdKModal({
             {items.map(([f], i) => (
               <button
                 key={f}
-                ref={(el) => (btnRefs.current[i] = el)}
+                ref={(el) => { btnRefs.current[i] = el; }}
                 role="option"
                 tabIndex={i === active ? 0 : -1}   // ← NUEVO: roving tabindex
                 aria-selected={i === active}
