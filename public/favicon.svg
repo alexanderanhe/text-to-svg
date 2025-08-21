@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Text to SVG">
+  <title>Text to SVG</title>
+  <!-- Fondo -->
+  <rect x="0" y="0" width="64" height="64" rx="12" fill="#09f"/>
+  <!-- Letra T (texto de entrada) -->
+  <rect x="10" y="14" width="28" height="8" rx="2" fill="#ffffff"/>
+  <rect x="21" y="22" width="8" height="28" rx="2" fill="#ffffff"/>
+  <!-- Chevrón de salida (hacia SVG) -->
+  <path d="M42 22 L52 32 L42 42" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
