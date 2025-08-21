@@ -7,6 +7,9 @@ const FONT_URL = "/Inter_18pt-Regular.ttf";
 
 type FontGoogle = [string, string];
 
+type Pt = { x: number; y: number };
+type Stroke = { color: string; size: number; points: Pt[] };
+
 export default function TextToSVG() {
   // Estado UI
   const [fonts, setFonts] = useState<FontGoogle[]>(FALLBACK_FONTS);
@@ -17,6 +20,13 @@ export default function TextToSVG() {
   const [fill, setFill] = useState<string>("#111111");
   const [bg, setBg] = useState<string>("#ffffff");
   const [transparentBG, setTransparentBG] = useState<boolean>(true);
+
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const drawingRef = useRef<Stroke | null>(null);
+
+  // Config del lápiz
+  const [penColor, setPenColor] = useState<string>("#111"); // o usa `fill`
+  const [penSize, setPenSize] = useState<number>(3);
 
   // Estado fuente
   const [status, setStatus] = useState<string>("");
@@ -132,6 +142,23 @@ export default function TextToSVG() {
       p.draw(ctx);
       y += lineStep;
     }
+
+    // --- DIBUJAR TRAZOS ---
+    ctx.save();
+    strokes.forEach((s) => {
+      if (s.points.length < 2) return;
+      ctx.beginPath();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.size;
+      ctx.moveTo(s.points[0].x, s.points[0].y);
+      for (let i = 1; i < s.points.length; i++) {
+        ctx.lineTo(s.points[i].x, s.points[i].y);
+      }
+      ctx.stroke();
+    });
+    ctx.restore();
   }
 
   function exportSVG() {
@@ -140,22 +167,19 @@ export default function TextToSVG() {
       return;
     }
 
-    // Si tienes un canvas de referencia para la escala (preview):
     const canvas = canvasRef?.current as HTMLCanvasElement | null;
     const targetW = Math.max(1, canvas?.width ?? 1024);
     const targetH = Math.max(1, canvas?.height ?? 512);
 
-    // Texto por líneas; línea vacía cuenta altura
+    // --- TEXTO: igual que tu versión tight (sin padding/fontSize fijos) ---
     const lines = (text ?? "").split("\n").map(l => (l.length ? l : " "));
-    if (lines.length === 0) return;
+    if (lines.length === 0 && strokes.length === 0) return;
 
-    // Métricas base a size=1
     const unitsPerEm = font.unitsPerEm || 1000;
     const ascent1  = (font.ascender  || 0) / unitsPerEm;
     const descent1 = Math.abs((font.descender || 0) / unitsPerEm);
     const lineGapMult = typeof lineHeight === "number" ? lineHeight : 1.2;
 
-    // Medición de ancho máx a size=1
     let maxWidth1 = 0;
     for (const line of lines) {
       const p = font.getPath(line, 0, 0, 1);
@@ -164,56 +188,117 @@ export default function TextToSVG() {
       maxWidth1 = Math.max(maxWidth1, w);
     }
 
-    // Alto total del bloque a size=1
-    const totalHeight1 = ascent1 + descent1 + (lines.length - 1) * lineGapMult;
+    const totalHeight1 = (lines.length
+      ? ascent1 + descent1 + (lines.length - 1) * lineGapMult
+      : 0);
 
-    // Escala S que cabría en el canvas (solo para escalar el texto; no añade aire)
-    const sW = targetW / Math.max(maxWidth1, 1e-6);
-    const sH = targetH / Math.max(totalHeight1, 1e-6);
-    const S = Math.max(0.0001, Math.min(sW, sH));
+    // Escala del texto para encajar en canvas (no añade aire al SVG)
+    const sW = maxWidth1 ? targetW / maxWidth1 : Infinity;
+    const sH = totalHeight1 ? targetH / totalHeight1 : Infinity;
+    const S = !lines.length ? 1 : Math.max(0.0001, Math.min(sW, sH));
 
-    // Baseline de la primera línea (sin centrar: “tight”)
     const ascentPx = ascent1 * S;
     const lineStep = lineGapMult * S;
-    let y = ascentPx;   // primera baseline
+    let y = ascentPx;
     const x = 0;
 
-    // Construir paths escalados y bbox total
-    const ds: string[] = [];
-    let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
+    const textPaths: string[] = [];
+    let txMin = Infinity, tyMin = Infinity, txMax = -Infinity, tyMax = -Infinity;
 
-    for (const line of lines) {
-      const p = font.getPath(line, x, y, S);
-      ds.push(p.toPathData(3));
-      const b = p.getBoundingBox();
-      xMin = Math.min(xMin, b.x1);
-      yMin = Math.min(yMin, b.y1);
-      xMax = Math.max(xMax, b.x2);
-      yMax = Math.max(yMax, b.y2);
-      y += lineStep;
+    if (lines.length) {
+      for (const line of lines) {
+        const p = font.getPath(line, x, y, S);
+        textPaths.push(p.toPathData(3));
+        const b = p.getBoundingBox();
+        txMin = Math.min(txMin, b.x1);
+        tyMin = Math.min(tyMin, b.y1);
+        txMax = Math.max(txMax, b.x2);
+        tyMax = Math.max(tyMax, b.y2);
+        y += lineStep;
+      }
     }
 
-    // Ajuste para que el contenido quede en (0,0)
-    const tx = isFinite(xMin) ? -xMin : 0;
-    const ty = isFinite(yMin) ? -yMin : 0;
+    // --- TRAZOS (mano alzada) ---
+    // Convierte cada stroke en un <path> con stroke/width y recoge bbox
+    let sxMin = Infinity, syMin = Infinity, sxMax = -Infinity, syMax = -Infinity;
+    const strokePaths: string[] = [];
 
-    // Dimensiones "tight"
-    const vbW = Math.max(1, Math.ceil((xMax - xMin) || 1));
-    const vbH = Math.max(1, Math.ceil((yMax - yMin) || 1));
+    const strokeToD = (pts: Pt[]) => {
+      if (!pts.length) return "";
+      let d = `M ${pts[0].x} ${pts[0].y}`;
+      for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
+      return d;
+    };
 
-    const d = ds.join(" ");
+    strokes.forEach((s) => {
+      if (s.points.length < 2) return;
+      // bbox de puntos (considera grosor)
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      s.points.forEach((p) => {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      });
+      const half = s.size / 2;
+      sxMin = Math.min(sxMin, minX - half);
+      syMin = Math.min(syMin, minY - half);
+      sxMax = Math.max(sxMax, maxX + half);
+      syMax = Math.max(syMax, maxY + half);
 
-    // Fondo opcional (si NO es transparente)
+      const d = strokeToD(s.points);
+      strokePaths.push(
+        `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`
+      );
+    });
+
+    // --- BBOX combinado (texto + trazos) ---
+    const mins = [
+      isFinite(txMin) ? txMin : Infinity,
+      isFinite(tyMin) ? tyMin : Infinity,
+      isFinite(sxMin) ? sxMin : Infinity,
+      isFinite(syMin) ? syMin : Infinity,
+    ];
+    const maxs = [
+      isFinite(txMax) ? txMax : -Infinity,
+      isFinite(tyMax) ? tyMax : -Infinity,
+      isFinite(sxMax) ? sxMax : -Infinity,
+      isFinite(syMax) ? syMax : -Infinity,
+    ];
+
+    const xMinAll = Math.min(mins[0], mins[2]);
+    const yMinAll = Math.min(mins[1], mins[3]);
+    const xMaxAll = Math.max(maxs[0], maxs[2]);
+    const yMaxAll = Math.max(maxs[1], maxs[3]);
+
+    // Si no hay nada, aborta
+    if (!isFinite(xMinAll) || !isFinite(yMinAll) || !isFinite(xMaxAll) || !isFinite(yMaxAll)) {
+      return;
+    }
+
+    const vbW = Math.max(1, Math.ceil(xMaxAll - xMinAll));
+    const vbH = Math.max(1, Math.ceil(yMaxAll - yMinAll));
+
+    // Fondo opcional
     const bgRect = transparentBG
       ? ""
       : `  <rect x="0" y="0" width="${vbW}" height="${vbH}" fill="${bg}"/>\n`;
 
-    // Color del texto desde tu estado `fill`
+    // Grupo con translate para alinear todo a (0,0)
+    const T = `transform="translate(${-xMinAll},${-yMinAll})"`;
+
+    const textPathEl = textPaths.length
+      ? `  <path d="${textPaths.join(" ")}" fill="${fill}" />\n`
+      : "";
+
     const svg =
       `<?xml version="1.0" encoding="UTF-8"?>\n` +
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW} ${vbH}" width="${vbW}" height="${vbH}">\n` +
       bgRect +
-      `  <path d="${d}" fill="${fill}" transform="translate(${tx},${ty})"/>\n` +
+      `  <g ${T}>\n` +
+      textPathEl +
+      (strokePaths.length ? `  ${strokePaths.join("\n  ")}\n` : "") +
+      `  </g>\n` +
       `</svg>`;
 
     const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
@@ -224,6 +309,7 @@ export default function TextToSVG() {
     a.click();
     URL.revokeObjectURL(url);
   }
+
 
   function onUploadTTF(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -238,6 +324,52 @@ export default function TextToSVG() {
       }
     });
   }
+
+  function getCanvasPos(canvas: HTMLCanvasElement, e: React.PointerEvent) {
+  const r = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / r.width;
+  const scaleY = canvas.height / r.height;
+  return { x: (e.clientX - r.left) * scaleX, y: (e.clientY - r.top) * scaleY };
+}
+
+function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+  const canvas = e.currentTarget;
+  canvas.setPointerCapture?.(e.pointerId);
+  const p = getCanvasPos(canvas, e);
+  const s: Stroke = { color: penColor, size: penSize, points: [p] };
+  drawingRef.current = s;
+  setStrokes((prev) => [...prev, s]);
+}
+
+function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+  const s = drawingRef.current;
+  if (!s) return;
+  const canvas = e.currentTarget;
+  const p = getCanvasPos(canvas, e);
+  const last = s.points[s.points.length - 1];
+  if (!last || last.x !== p.x || last.y !== p.y) {
+    s.points.push(p);
+    // Dibuja incrementalmente el segmento (opcional, para feedback inmediato)
+    const ctx = canvas.getContext("2d");
+    if (ctx && last) {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.size;
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+  drawingRef.current = null;
+}
+
 
   return (
     <div className="min-h-screen w-full bg-neutral-50 text-neutral-900">
@@ -317,17 +449,48 @@ export default function TextToSVG() {
                 </label>
               </div>
             </div>
+
             <div className="col-span-4">
               <Label>Fuente (sube TTF/OTF): </Label>
               <input type="file" accept=".ttf,.otf" onChange={onUploadTTF} />
             </div>
+
+            <div>
+              <Label>Pencil Color</Label>
+              <input
+                type="color"
+                className="w-full h-10 p-1 rounded-lg border border-neutral-300"
+                value={penColor}
+                onChange={(e) => setPenColor(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <Label>Line height</Label>
+              <input
+                type="number"
+                step="1"
+                className="w-full p-2 rounded-lg border border-neutral-300"
+                min={1}
+                max={20}
+                value={penSize}
+                onChange={(e) => setPenSize(+e.target.value || 3)}
+              />
+            </div>
+
           </div>
         </div>
 
         <div className="md:pl-6">
           <h2 className="text-lg font-medium mb-2">Vista previa <span className={`font-[${fontFamily}]`}>{fontFamily}</span></h2>
           <div id="result-wrap" className="flex rounded-2xl border border-neutral-300 bg-white shadow-sm overflow-auto">{/* p-3 */}
-            <canvas ref={canvasRef} className="flex-1 max-w-full h-auto min-h-48 rounded-lg" />
+            <canvas
+              ref={canvasRef}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+              className="flex-1 max-w-full h-auto min-h-48 rounded-lg" />
           </div>
           <p className="text-xs text-neutral-500 mt-2">
             {status} {fill}
