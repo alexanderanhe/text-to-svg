@@ -2,6 +2,9 @@
 
 Convierte texto a **paths SVG** con previsualización en `<canvas>`, búsqueda de fuentes (Google Fonts) y exportación sin “aire” (bounding box tight).
 
+[![Producción](https://img.shields.io/badge/app-en%20vivo-brightgreen)](https://text-to-svg.angu.dev/)
+
+
 ## 🚀 Stack
 - React + Vite (TypeScript)
 - OpenType.js (trazado de texto a paths)
