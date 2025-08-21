@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "./KCmdModal";
-import { Label } from "./Ui";
+import { Label } from "./ui";
 
 const FONT_URL = "/Inter_18pt-Regular.ttf";
 
