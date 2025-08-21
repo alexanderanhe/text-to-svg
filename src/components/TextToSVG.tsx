@@ -366,7 +366,7 @@ function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
   }
 }
 
-function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+function onPointerUp() {
   drawingRef.current = null;
 }
 
