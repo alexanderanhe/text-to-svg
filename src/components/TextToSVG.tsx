@@ -407,7 +407,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               />
             </div>
 
-            <div>
+            <div className="col-span-2 sm:col-span-1">
               <Label>Line height</Label>
               <input
                 type="number"
@@ -420,7 +420,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               />
             </div>
 
-            <div>
+            <div className="col-span-2 sm:col-span-1">
               <Label>Color</Label>
               <input
                 type="color"
@@ -430,7 +430,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               />
             </div>
 
-            <div className="col-span-2">
+            <div className="col-span-4 sm:col-span-2">
               <Label>Fondo</Label>
               <div className="flex items-center gap-2">
                 <input
@@ -450,12 +450,12 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               </div>
             </div>
 
-            <div className="col-span-4">
+            <div className="col-span-4 overflow-hidden">
               <Label>Fuente (sube TTF/OTF): </Label>
               <input type="file" accept=".ttf,.otf" onChange={onUploadTTF} />
             </div>
 
-            <div>
+            <div className="col-span-2 sm:col-span-1">
               <Label>Pencil Color</Label>
               <input
                 type="color"
@@ -465,7 +465,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               />
             </div>
 
-            <div>
+            <div className="col-span-2 sm:col-span-1">
               <Label>Line height</Label>
               <input
                 type="number"
