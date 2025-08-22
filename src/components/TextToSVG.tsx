@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "./KCmdModal";
-import { DownloadIcon, ErraserIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerUpIcon, NewIcon, PaintBrushIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
+import { DownloadIcon, ErraserIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerUpIcon, NewIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
 
 type FontGoogle = [string, string];
 
@@ -94,6 +94,7 @@ export default function TextToSVG() {
   const [bg, setBg] = useState<string>("#ffffff");
   const [transparentBG, setTransparentBG] = useState<boolean>(true);
   const [status, setStatus] = useState<string>("");
+  const [dragActive, setDragActive] = useState(false);
 
   // Herramientas / lápiz
   const [tool, setTool] = useState<Tool>("select");
@@ -621,6 +622,91 @@ export default function TextToSVG() {
     return out;
   }
 
+  const isFontFile = (f: File) =>
+    /\.(ttf|otf)$/i.test(f.name) ||
+    f.type.startsWith("font") ||
+    f.type === "application/x-font-ttf" ||
+    f.type === "application/x-font-otf";
+
+  const isSvgFile = (f: File) =>
+    /\.svg$/i.test(f.name) || f.type === "image/svg+xml";
+
+  function getDropCanvasPos(e: React.DragEvent) {
+    const canvas = canvasRef.current!;
+    const r = canvas.getBoundingClientRect();
+    const sx = canvas.width / r.width;
+    const sy = canvas.height / r.height;
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  }
+
+  function onDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+
+  function onDragEnter(e: React.DragEvent) {
+    e.preventDefault();
+    setDragActive(true);
+  }
+
+  function onDragLeave(e: React.DragEvent) {
+    // evita parpadeo: solo cierra si salimos del contenedor
+    if (e.currentTarget === e.target) setDragActive(false);
+  }
+
+  async function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragActive(false);
+    const { x, y } = getDropCanvasPos(e);
+    const files = Array.from(e.dataTransfer.files);
+
+    for (const file of files) {
+      if (isFontFile(file)) {
+        try {
+          const buf = await file.arrayBuffer();
+          const f = opentype.parse(buf);
+          const name = f.names.fullName?.en || file.name.replace(/\.(ttf|otf)$/i, "");
+          fontCacheRef.current.set(name, f);
+          setFonts(prev => [[name, ""], ...prev]);
+          setFontFamily(name);
+          setStatus(`Fuente cargada: ${name}`);
+          setTool("text");
+        } catch (err: any) {
+          setStatus("No pude parsear el TTF/OTF: " + (err?.message || err));
+        }
+        continue;
+      }
+
+      if (isSvgFile(file)) {
+        const txt = await file.text();
+        const meta = parseSVGMeta(txt);
+        const iw = meta.width ?? meta.vbW ?? 100;
+        const ih = meta.height ?? meta.vbH ?? 100;
+
+        const s: SvgStroke = {
+          id: uid(),
+          type: "svg",
+          z: getMaxZ(strokes) + 1,
+          visible: true,
+          locked: false,
+          svg: txt,
+          x, y,
+          scale: 1,
+          rotation: 0,
+          iw, ih,
+        };
+        setStrokes(prev => [...prev, s]);
+        setSelectedIds([s.id]);
+        continue;
+      }
+
+      setStatus(`Tipo no soportado: ${file.name}`);
+    }
+
+    drawPreview();
+  }
+
+
   function drawSVG(ctx: CanvasRenderingContext2D, s: SvgStroke) {
     // cache de Image por id (rasteriza solo para PREVIEW)
     let img = svgImgCacheRef.current.get(s.id);
@@ -802,6 +888,7 @@ ${textEls.join("\n")}
         setFonts(prev => [[name, ""], ...prev]);
         setFontFamily(name);
         setStatus(`Fuente cargada: ${name}`);
+        setTool("text");
         drawPreview();
       } catch (err: any) {
         setStatus("No pude parsear el TTF/OTF: " + (err?.message || err));
@@ -873,219 +960,227 @@ ${textEls.join("\n")}
 
   // ==== JSX ====
   return (
-    <div className="w-full">
-      <div className="max-w-6xl mx-auto p-6 grid gap-6 md:grid-rows-[auto_1fr]">
-        <div>
-          <h1 className="text-2xl font-semibold mb-1">Editor Text + Dibujo → SVG</h1>
-          <p className="text-sm text-neutral-600 mb-4">{status}</p>
+    <div className="w-full h-dvh max-w-6xl mx-auto p-2 grid gap-6 grid-rows-[auto_1fr_auto]">
+      <div>
+        <h1 className="text-2xl font-semibold mb-1">Editor Text + Dibujo → SVG</h1>
+        <p className="text-sm text-neutral-600 mb-4">{status}</p>
 
-          <div className="grid grid-cols-8 gap-3 mb-4">
-            { tool === "text" && (
-              <>
-                <div className="col-span-full sm:col-span-4">
-                  <Label>Fuente (Google Fonts)</Label>
-                  <KCmdKModal
-                    title="Fuente (Google Fonts)"
-                    label={fontFamily || "Fuente"}
-                    fonts={fonts}
-                    handleFontChange={(f) => { handleFontChange(f); }}
-                    API_KEY={API_KEY}
-                  />
-                  <p className="text-xs text-neutral-500">
-                    Puedes buscar una fuente, o subir un TTF/OTF personalizado.
-                  </p>
-                </div>
-
-                <div className="col-span-4 overflow-hidden">
-                  <Label>Fuente (sube TTF/OTF): </Label>
-                  <input type="file" accept=".ttf,.otf" onChange={onUploadTTF} />
-                </div>
-                <div className="col-span-2 sm:col-span-1">
-                  <Label>Line height</Label>
-                  <input
-                    type="number"
-                    step="0.05"
-                    className="w-full p-2 rounded-lg border border-neutral-300"
-                    min={0.8}
-                    max={3}
-                    value={lineHeight}
-                    onChange={(e) => setLineHeight(+e.target.value || 1.2)}
-                  />
-                </div>
-
-                <div className="col-span-2 sm:col-span-1">
-                  <Label>Color de texto</Label>
-                  <input
-                    type="color"
-                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
-                    value={fill}
-                    onChange={(e) => setFill(e.target.value)}
-                  />
-                </div>
-              </>
-            )}
-
-            { (tool === "pen" || tool === "eraser") && (
-              <>
-                <div className="col-span-2 sm:col-span-1">
-                  <Label>Pencil Color</Label>
-                  <input
-                    type="color"
-                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
-                    value={penColor}
-                    onChange={(e) => setPenColor(e.target.value)}
-                  />
-                </div>
-
-                <div className="col-span-2 sm:col-span-1">
-                  <Label>Pencil Width</Label>
-                  <input
-                    type="number"
-                    step="1"
-                    className="w-full p-2 rounded-lg border border-neutral-300"
-                    min={1}
-                    max={40}
-                    value={penSize}
-                    onChange={(e) => setPenSize(+e.target.value || 3)}
-                  />
-                </div>
-              </>
-            )}
-
-            <div className="col-span-4">
-              <Label>Herramienta</Label>
-              <div className="flex flex-wrap items-center gap-2">
-                { tool === "select" && (
-                  <>
-                    <button onClick={() => bringToFront(selectedIds)} className="px-2 py-1 border rounded">
-                      <LayerUpIcon className="inline size-6" />
-                    </button>
-                    <button onClick={() => sendToBack(selectedIds)} className="px-2 py-1 border rounded">
-                      <LayerDownIcon className="inline size-6" />
-                    </button>
-                    <button onClick={() => bringForward(selectedIds)} className="px-2 py-1 border rounded">
-                      <SortAmountUpIcon className="inline size-6" />
-                    </button>
-                    <button onClick={() => sendBackward(selectedIds)} className="px-2 py-1 border rounded">
-                      <SortAmountDownIcon className="inline size-6" />
-                    </button>
-                  </>
-                )}
-                <label className="px-2 py-1 border rounded ml-auto">
-                  <ImagePlusIcon className="inline size-6" />
-                  <input type="file" className="hidden" accept=".svg" onChange={onUploadSVG} />
-                </label>
-                <button onClick={clearCanvas} className="px-2 py-1 rounded border ml-auto">
-                  <NewIcon className="inline size-6" />
-                </button>
-                <button onClick={undo} className="px-2 py-1 rounded border">
-                  <FlipBackwardsIcon className="inline size-6" />
-                </button>
-                <button onClick={deleteSelected} className="px-2 py-1 rounded border">
-                  <TrashIcon className="inline size-6" />
-                </button>
-                <button
-                  onClick={() => exportSVG({ eraseBackgroundToo: false })}
-                  className="px-2 py-1 rounded bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50 flex items-center gap-1"
-                >
-                  <span className="text-sm">SVG</span>
-                  <DownloadIcon className="inline size-6" />
-                </button>
-                {/* <button
-                  onClick={() => exportSVG({ eraseBackgroundToo: true })}
-                  className="px-2 py-1 rounded bg-neutral-700 text-white hover:bg-neutral-600 disabled:opacity-50"
-                  title="La goma también recorta el fondo"
-                >
-                  SVG (borra fondo)
-                </button> */}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-[auto_1fr] gap-1">
-          <div className="grid grid-cols-1 gap-1 place-content-start grid-rows-auto">
-            <button
-              type="button"
-              className={`px-3 py-2 rounded-lg ${tool === "select" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
-              onClick={() => setTool("select")}
-            >
-              <SquareDashedIcon className="size-8" />
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-2 rounded-lg ${tool === "text" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
-              onClick={() => setTool("text")}
-            >
-              <TextIcon className="size-8" />
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-2 rounded-lg ${tool === "pen" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
-              onClick={() => setTool("pen")}
-            >
-              <PaintBrushIcon className="size-8" />
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-2 rounded-lg ${tool === "eraser" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
-              onClick={() => setTool("eraser")}
-            >
-              <ErraserIcon className="size-8" />
-            </button>
-            <input
-              type="color"
-              className={`size-14 p-1 rounded-lg border border-neutral-300 bg-neutral-200 overflow-hidden ${transparentBG ? 'relative before:content-[\'\'] before:absolute before:left-2 before:bottom-2 before:w-13 before:h-0.5 before:bg-red-500 before:-rotate-43 before:origin-left' : ''}`}
-              disabled={transparentBG}
-              value={transparentBG ? '#ffffff' : bg}
-              onChange={(e)=>setBg(e.target.value)}
-            />
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={transparentBG}
-                onChange={(e)=>setTransparentBG(e.target.checked)}
-              />
-            </label>
-          </div>
-
-          <div>
-
-            <div
-              id="result-wrap"
-              ref={wrapRef}
-              className="relative flex rounded-2xl border border-neutral-300 bg-white shadow-sm overflow-auto overscroll-contain"
-            >
-              <canvas
-                ref={canvasRef}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
-                onDoubleClick={onDoubleClick}
-                className="flex-1 max-w-full h-auto min-h-48 rounded-lg touch-none"
-              />
-              {/* Overlay de edición */}
-              {editing && (
-                <textarea
-                  ref={editingRef}
-                  value={editing.value}
-                  onChange={(e)=>setEditing(ed => ed ? {...ed, value: e.target.value} : ed)}
-                  onBlur={commitEdit}
-                  onKeyDown={(e)=>{ if(e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitEdit(); } }}
-                  style={{ position:"absolute", left: editing.left, top: editing.top, width: editing.width }}
-                  className="rounded-md border border-neutral-300 bg-white p-2 shadow-sm text-sm outline-none focus:ring-2 focus:ring-neutral-600"
-                  rows={3}
+        <div className="grid grid-cols-8 gap-3 mb-4">
+          { tool === "text" && (
+            <>
+              <div className="col-span-full sm:col-span-4">
+                <Label>Fuente (Google Fonts)</Label>
+                <KCmdKModal
+                  title="Fuente (Google Fonts)"
+                  label={fontFamily || "Fuente"}
+                  fonts={fonts}
+                  handleFontChange={(f) => { handleFontChange(f); }}
+                  API_KEY={API_KEY}
                 />
+              </div>
+
+              <div>
+                <Label>&nbsp;</Label>
+                <label className="px-2 py-1 border rounded cursor-pointer">
+                  <PlusIcon className="inline size-6 mr-1" />
+                  <input type="file" className="hidden" accept=".ttf,.otf" onChange={onUploadTTF} />
+                </label>
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <Label>Line height</Label>
+                <input
+                  type="number"
+                  step="0.05"
+                  className="w-full p-2 rounded-lg border border-neutral-300"
+                  min={0.8}
+                  max={3}
+                  value={lineHeight}
+                  onChange={(e) => setLineHeight(+e.target.value || 1.2)}
+                />
+              </div>
+
+              <div className="col-span-2 sm:col-span-1">
+                <Label>Color de texto</Label>
+                <input
+                  type="color"
+                  className="w-full h-10 p-1 rounded-lg border border-neutral-300"
+                  value={fill}
+                  onChange={(e) => setFill(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          { (tool === "pen" || tool === "eraser") && (
+            <>
+              <div className="col-span-2 sm:col-span-1">
+                <Label>Pencil Color</Label>
+                <input
+                  type="color"
+                  className="w-full h-10 p-1 rounded-lg border border-neutral-300"
+                  value={penColor}
+                  onChange={(e) => setPenColor(e.target.value)}
+                />
+              </div>
+
+              <div className="col-span-2 sm:col-span-1">
+                <Label>Pencil Width</Label>
+                <input
+                  type="number"
+                  step="1"
+                  className="w-full p-2 rounded-lg border border-neutral-300"
+                  min={1}
+                  max={40}
+                  value={penSize}
+                  onChange={(e) => setPenSize(+e.target.value || 3)}
+                />
+              </div>
+            </>
+          )}
+
+          <div className="col-span-4">
+            <Label>Herramienta</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              { tool === "select" && (
+                <>
+                  <button onClick={() => bringToFront(selectedIds)} className="px-2 py-1 border rounded">
+                    <LayerUpIcon className="inline size-6" />
+                  </button>
+                  <button onClick={() => sendToBack(selectedIds)} className="px-2 py-1 border rounded">
+                    <LayerDownIcon className="inline size-6" />
+                  </button>
+                  <button onClick={() => bringForward(selectedIds)} className="px-2 py-1 border rounded">
+                    <SortAmountUpIcon className="inline size-6" />
+                  </button>
+                  <button onClick={() => sendBackward(selectedIds)} className="px-2 py-1 border rounded">
+                    <SortAmountDownIcon className="inline size-6" />
+                  </button>
+                </>
               )}
+              <label className="px-2 py-1 border rounded ml-auto">
+                <ImagePlusIcon className="inline size-6" />
+                <input type="file" className="hidden" accept=".svg" onChange={onUploadSVG} />
+              </label>
+              <button onClick={clearCanvas} className="px-2 py-1 rounded border ml-auto">
+                <NewIcon className="inline size-6" />
+              </button>
+              <button onClick={undo} className="px-2 py-1 rounded border">
+                <FlipBackwardsIcon className="inline size-6" />
+              </button>
+              <button onClick={deleteSelected} className="px-2 py-1 rounded border">
+                <TrashIcon className="inline size-6" />
+              </button>
+              <button
+                onClick={() => exportSVG({ eraseBackgroundToo: false })}
+                className="px-2 py-1 rounded bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50 flex items-center gap-1"
+              >
+                <span className="text-sm">SVG</span>
+                <DownloadIcon className="inline size-6" />
+              </button>
+              {/* <button
+                onClick={() => exportSVG({ eraseBackgroundToo: true })}
+                className="px-2 py-1 rounded bg-neutral-700 text-white hover:bg-neutral-600 disabled:opacity-50"
+                title="La goma también recorta el fondo"
+              >
+                SVG (borra fondo)
+              </button> */}
             </div>
           </div>
-          <p className="col-span-full text-xs text-neutral-500">
-            Texto: click para crear, doble click para editar. Seleccionar: arrastra para mover. Delete para borrar.
-            Tip: mantén <kbd>Shift</kbd> al iniciar un trazo para insertarlo debajo de lo seleccionado.
-          </p>
-          {/* <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre> */}
         </div>
+      </div>
+
+      <div className="grid grid-cols-[auto_1fr] gap-1">
+        <div className="grid grid-cols-1 gap-1 place-content-start grid-rows-auto">
+          <button
+            type="button"
+            className={`px-3 py-2 rounded-lg ${tool === "select" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+            onClick={() => setTool("select")}
+          >
+            <SquareDashedIcon className="size-8" />
+          </button>
+          <button
+            type="button"
+            className={`px-3 py-2 rounded-lg ${tool === "text" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+            onClick={() => setTool("text")}
+          >
+            <TextIcon className="size-8" />
+          </button>
+          <button
+            type="button"
+            className={`px-3 py-2 rounded-lg ${tool === "pen" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+            onClick={() => setTool("pen")}
+          >
+            <PaintBrushIcon className="size-8" />
+          </button>
+          <button
+            type="button"
+            className={`px-3 py-2 rounded-lg ${tool === "eraser" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+            onClick={() => setTool("eraser")}
+          >
+            <ErraserIcon className="size-8" />
+          </button>
+          <input
+            type="color"
+            className={`size-14 p-1 rounded-lg border border-neutral-300 bg-neutral-200 overflow-hidden ${transparentBG ? 'relative before:content-[\'\'] before:absolute before:left-2 before:bottom-2 before:w-13 before:h-0.5 before:bg-red-500 before:-rotate-43 before:origin-left' : ''}`}
+            disabled={transparentBG}
+            value={transparentBG ? '#ffffff' : bg}
+            onChange={(e)=>setBg(e.target.value)}
+          />
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={transparentBG}
+              onChange={(e)=>setTransparentBG(e.target.checked)}
+            />
+          </label>
+        </div>
+
+        <div>
+
+          <div
+            id="result-wrap"
+            ref={wrapRef}
+            onDragOver={onDragOver}
+            onDrop={onDrop}
+            onDragEnter={onDragEnter}
+            onDragLeave={onDragLeave}
+            className="relative h-full flex rounded-2xl border border-neutral-300 bg-white shadow-sm overflow-auto overscroll-contain"
+          >
+            <canvas
+              ref={canvasRef}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+              onDoubleClick={onDoubleClick}
+              className="flex-1 max-w-full h-full min-h-48 rounded-lg touch-none"
+            />
+            {/* Overlay de edición */}
+            {editing && (
+              <textarea
+                ref={editingRef}
+                value={editing.value}
+                onChange={(e)=>setEditing(ed => ed ? {...ed, value: e.target.value} : ed)}
+                onBlur={commitEdit}
+                onKeyDown={(e)=>{ if(e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitEdit(); } }}
+                style={{ position:"absolute", left: editing.left, top: editing.top, width: editing.width }}
+                className="rounded-md border border-neutral-300 bg-white p-2 shadow-sm text-sm outline-none focus:ring-2 focus:ring-neutral-600"
+                rows={3}
+              />
+            )}
+            {dragActive && (
+              <div className="pointer-events-none absolute inset-0 grid place-items-center rounded-2xl border-2 border-dashed border-blue-400/70 bg-blue-500/5 text-blue-700 text-sm">
+                <p>Suelta un <b>.TTF/.OTF</b> para cargar fuente o un <b>.SVG</b> para añadir al lienzo</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="col-span-full max-h-14 overflow-y-auto space-y-1">
+        <p className="text-xs text-neutral-500">Puedes buscar una fuente, o subir un TTF/OTF personalizado.</p>
+        <p className="text-xs text-neutral-500">Texto: click para crear, doble click para editar. Seleccionar: arrastra para mover. Delete para borrar.</p>
+        <p className="text-xs text-neutral-500">Tip: mantén <kbd>Shift</kbd> al iniciar un trazo para insertarlo debajo de lo seleccionado.</p>
+        {/* <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre> */}
       </div>
     </div>
   );
