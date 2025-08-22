@@ -300,8 +300,8 @@ export default function TextToSVG() {
     for (const line of lines) {
       const x = s.x + alignShiftX(f, line, s.size, s.align);
       const p = f.getPath(line, x, y, s.size);
-      (p as any).fill = s.fill;
-      (p as any).stroke = null;
+      p.fill = s.fill;
+      p.stroke = null;
       p.draw(ctx);
       y += s.size * s.lineHeight;
     }
@@ -328,7 +328,7 @@ export default function TextToSVG() {
         if (p.x > maxX) maxX = p.x;
         if (p.y > maxY) maxY = p.y;
       }
-      const h = (s as any).size / 2;
+      const h = s.size / 2;
       return { x: minX - h, y: minY - h, w: (maxX - minX) + 2*h, h: (maxY - minY) + 2*h };
     } else if (s.type === "svg") {
       const w = s.iw * s.scale;
@@ -391,7 +391,7 @@ export default function TextToSVG() {
         let d = `M ${s.points[0].x} ${s.points[0].y}`;
         for (let i=1;i<s.points.length;i++) d += ` L ${s.points[i].x} ${s.points[i].y}`;
         const path2d = new Path2D(d);
-        (ctx as any).lineWidth = (s as any).size + 4;
+        ctx.lineWidth = s.size + 4;
         if (ctx.isPointInStroke(path2d, pt.x, pt.y)) return s.id;
       }
     }
@@ -609,9 +609,9 @@ export default function TextToSVG() {
 
   // parser muy simple de width/height/viewBox
   function parseSVGMeta(svg: string): { width?: number; height?: number; vbX?: number; vbY?: number; vbW?: number; vbH?: number } {
-    const mView = svg.match(/viewBox\\s*=\\s*\"([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)\"/i);
-    const mW = svg.match(/\\swidth\\s*=\\s*\"([\\d\\.]+)(px)?\"/i);
-    const mH = svg.match(/\\sheight\\s*=\\s*\"([\\d\\.]+)(px)?\"/i);
+    const mView = svg.match(/viewBox\\s*=\\s*"([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)"/i);
+    const mW = svg.match(/\\swidth\\s*=\\s*"([\\d\\.]+)(px)?"/i);
+    const mH = svg.match(/\\sheight\\s*=\\s*"([\\d\\.]+)(px)?"/i);
     const out: any = {};
     if (mView) {
       out.vbX = +mView[1]; out.vbY = +mView[2]; out.vbW = +mView[3]; out.vbH = +mView[4];
@@ -724,7 +724,6 @@ export default function TextToSVG() {
         if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
         if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
       }
-      const h = s.size / 2;
       // La goma no añade a bounds visibles
       eraserMask.push(`<path d="${d}" fill="none" stroke="black" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`);
     }
