@@ -599,7 +599,7 @@ export default function TextToSVG() {
         clientX >= window.innerWidth || clientY >= window.innerHeight;
       if (out) setDragOff();
     };
-    const onWindowDrop = (e: DragEvent) => {
+    const onWindowDrop = () => {
       // suelta en cualquier lado (incluyendo fuera del contenedor)
       setDragOff();
     };
