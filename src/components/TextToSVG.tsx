@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "./KCmdModal";
 import { DownloadIcon, ErraserIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerUpIcon, NewIcon, PaintBrushIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
@@ -1085,7 +1085,7 @@ ${textEls.join("\n")}
             Texto: click para crear, doble click para editar. Seleccionar: arrastra para mover. Delete para borrar.
             Tip: mantén <kbd>Shift</kbd> al iniciar un trazo para insertarlo debajo de lo seleccionado.
           </p>
-          <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre>
+          {/* <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre> */}
         </div>
       </div>
     </div>
