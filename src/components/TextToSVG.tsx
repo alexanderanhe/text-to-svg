@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "./KCmdModal";
-import { DownloadIcon, ErraserIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerUpIcon, NewIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
+import { DownloadIcon, ErraserIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, NewIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
+import { Drawer } from "vaul";
 
 type FontGoogle = [string, string];
 
@@ -95,6 +96,7 @@ export default function TextToSVG() {
   const [transparentBG, setTransparentBG] = useState<boolean>(true);
   const [status, setStatus] = useState<string>("");
   const [dragActive, setDragActive] = useState(false);
+  const dragDepthRef = useRef(0);
 
   // Herramientas / lápiz
   const [tool, setTool] = useState<Tool>("select");
@@ -199,6 +201,11 @@ export default function TextToSVG() {
     if (!ctx) throw new Error("No 2D context");
     return ctx;
   }
+
+  const setDragOff = () => {
+    dragDepthRef.current = 0;
+    setDragActive(false);
+  };
 
   function drawPreview() {
     const canvas = canvasRef.current;
@@ -582,6 +589,32 @@ export default function TextToSVG() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedIds]);
+
+  useEffect(() => {
+    const onWindowDragLeave = (e: DragEvent) => {
+      // si el puntero sale de la ventana
+      const { clientX, clientY } = e;
+      const out =
+        clientX <= 0 || clientY <= 0 ||
+        clientX >= window.innerWidth || clientY >= window.innerHeight;
+      if (out) setDragOff();
+    };
+    const onWindowDrop = (e: DragEvent) => {
+      // suelta en cualquier lado (incluyendo fuera del contenedor)
+      setDragOff();
+    };
+    const onWindowDragEnd = () => setDragOff();
+
+    window.addEventListener("dragleave", onWindowDragLeave);
+    window.addEventListener("drop", onWindowDrop);
+    window.addEventListener("dragend", onWindowDragEnd);
+    return () => {
+      window.removeEventListener("dragleave", onWindowDragLeave);
+      window.removeEventListener("drop", onWindowDrop);
+      window.removeEventListener("dragend", onWindowDragEnd);
+    };
+  }, []);
+
   
   function onUploadSVG(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -646,16 +679,24 @@ export default function TextToSVG() {
 
   function onDragEnter(e: React.DragEvent) {
     e.preventDefault();
+    dragDepthRef.current += 1;
     setDragActive(true);
   }
 
   function onDragLeave(e: React.DragEvent) {
-    // evita parpadeo: solo cierra si salimos del contenedor
-    if (e.currentTarget === e.target) setDragActive(false);
+    e.preventDefault();
+    // Si realmente salimos del contenedor (no a un hijo), decrementa
+    // Nota: relatedTarget puede venir null en arrastres desde el SO
+    if (!e.currentTarget || (e as any).relatedTarget === null || 
+        !(e.currentTarget as Element).contains((e as any).relatedTarget as Node)) {
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setDragActive(false);
+    }
   }
 
   async function onDrop(e: React.DragEvent) {
     e.preventDefault();
+    setDragOff();
     setDragActive(false);
     const { x, y } = getDropCanvasPos(e);
     const files = Array.from(e.dataTransfer.files);
@@ -960,15 +1001,16 @@ ${textEls.join("\n")}
 
   // ==== JSX ====
   return (
-    <div className="w-full h-dvh max-w-6xl mx-auto p-2 grid gap-6 grid-rows-[auto_1fr_auto]">
+    <div className="w-full h-dvh max-w-6xl mx-auto p-2 grid gap-1 grid-rows-[auto_1fr_auto]">
       <div>
-        <h1 className="text-2xl font-semibold mb-1">Editor Text + Dibujo → SVG</h1>
-        <p className="text-sm text-neutral-600 mb-4">{status}</p>
-
-        <div className="grid grid-cols-8 gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <h1>
+            <img src="/favicon.svg" className="w-14" alt="Editor Text + Dibujo → SVG" />
+            <span className="hidden">Editor Text + Dibujo → SVG</span>
+          </h1>
           { tool === "text" && (
             <>
-              <div className="col-span-full sm:col-span-4">
+              <div className="w-full max-w-xs sm:col-span-4">
                 <Label>Fuente (Google Fonts)</Label>
                 <KCmdKModal
                   title="Fuente (Google Fonts)"
@@ -999,7 +1041,7 @@ ${textEls.join("\n")}
                 />
               </div>
 
-              <div className="col-span-2 sm:col-span-1">
+              <div>
                 <Label>Color de texto</Label>
                 <input
                   type="color"
@@ -1013,7 +1055,7 @@ ${textEls.join("\n")}
 
           { (tool === "pen" || tool === "eraser") && (
             <>
-              <div className="col-span-2 sm:col-span-1">
+              <div>
                 <Label>Pencil Color</Label>
                 <input
                   type="color"
@@ -1023,7 +1065,7 @@ ${textEls.join("\n")}
                 />
               </div>
 
-              <div className="col-span-2 sm:col-span-1">
+              <div>
                 <Label>Pencil Width</Label>
                 <input
                   type="number"
@@ -1038,38 +1080,54 @@ ${textEls.join("\n")}
             </>
           )}
 
-          <div className="col-span-4">
-            <Label>Herramienta</Label>
-            <div className="flex flex-wrap items-center gap-2">
-              { tool === "select" && (
-                <>
-                  <button onClick={() => bringToFront(selectedIds)} className="px-2 py-1 border rounded">
-                    <LayerUpIcon className="inline size-6" />
-                  </button>
-                  <button onClick={() => sendToBack(selectedIds)} className="px-2 py-1 border rounded">
-                    <LayerDownIcon className="inline size-6" />
-                  </button>
-                  <button onClick={() => bringForward(selectedIds)} className="px-2 py-1 border rounded">
-                    <SortAmountUpIcon className="inline size-6" />
-                  </button>
-                  <button onClick={() => sendBackward(selectedIds)} className="px-2 py-1 border rounded">
-                    <SortAmountDownIcon className="inline size-6" />
-                  </button>
-                </>
-              )}
+          { tool === "select" && (
+            <div>
+              <Label>Herramientas de selección</Label>
+              <div className="flex items-center gap-2 h-11">
+                <button onClick={() => bringToFront(selectedIds)} className="px-2 py-1 border rounded">
+                  <LayerUpIcon className="inline size-6" />
+                </button>
+                <button onClick={() => sendToBack(selectedIds)} className="px-2 py-1 border rounded">
+                  <LayerDownIcon className="inline size-6" />
+                </button>
+                <button onClick={() => bringForward(selectedIds)} className="px-2 py-1 border rounded">
+                  <SortAmountUpIcon className="inline size-6" />
+                </button>
+                <button onClick={() => sendBackward(selectedIds)} className="px-2 py-1 border rounded">
+                  <SortAmountDownIcon className="inline size-6" />
+                </button>
+                <button onClick={deleteSelected} className="px-2 py-1 rounded border">
+                  <TrashIcon className="inline size-6" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="ml-auto">
+            <Label>&nbsp;</Label>
+            <div className="flex items-center gap-2">
+              <Drawer.Root direction="right">
+                <Drawer.Trigger className="px-2 py-1 rounded border">
+                  <LayerIcon className="inline size-6" />
+                </Drawer.Trigger>
+                <Drawer.Portal>
+                  <Drawer.Content>
+                    <Drawer.Title>Title</Drawer.Title>
+                  </Drawer.Content>
+                  <Drawer.Overlay />
+                </Drawer.Portal>
+              </Drawer.Root>
               <label className="px-2 py-1 border rounded ml-auto">
                 <ImagePlusIcon className="inline size-6" />
                 <input type="file" className="hidden" accept=".svg" onChange={onUploadSVG} />
               </label>
-              <button onClick={clearCanvas} className="px-2 py-1 rounded border ml-auto">
-                <NewIcon className="inline size-6" />
-              </button>
               <button onClick={undo} className="px-2 py-1 rounded border">
                 <FlipBackwardsIcon className="inline size-6" />
               </button>
-              <button onClick={deleteSelected} className="px-2 py-1 rounded border">
-                <TrashIcon className="inline size-6" />
+              <button onClick={clearCanvas} className="px-2 py-1 text-sm rounded border">
+                <NewIcon className="inline size-6" /> Nuevo
               </button>
+              <span className="w-px h-full bg-gray-400">&nbsp;</span>
               <button
                 onClick={() => exportSVG({ eraseBackgroundToo: false })}
                 className="px-2 py-1 rounded bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50 flex items-center gap-1"
@@ -1087,6 +1145,7 @@ ${textEls.join("\n")}
             </div>
           </div>
         </div>
+
       </div>
 
       <div className="grid grid-cols-[auto_1fr] gap-1">
@@ -1176,9 +1235,19 @@ ${textEls.join("\n")}
           </div>
         </div>
       </div>
-      <div className="col-span-full max-h-14 overflow-y-auto space-y-1">
-        <p className="text-xs text-neutral-500">Puedes buscar una fuente, o subir un TTF/OTF personalizado.</p>
-        <p className="text-xs text-neutral-500">Texto: click para crear, doble click para editar. Seleccionar: arrastra para mover. Delete para borrar.</p>
+      <div className="h-14 overflow-y-auto space-y-1">
+        <p className="text-xs text-neutral-500">{status}</p>
+        { tool === "text" && (
+          <>
+            <p className="text-xs text-neutral-500">click para crear, doble click para editar. Seleccionar: arrastra para mover. Delete para borrar.</p>
+            <p className="text-xs text-neutral-500">Puedes buscar una fuente, o subir un TTF/OTF personalizado.</p>
+          </>
+        )}
+        { tool === "select" && (
+          <>
+            <p className="text-xs text-neutral-500">Seleccionar: arrastra para mover. Delete para borrar.</p>
+          </>
+        )}
         <p className="text-xs text-neutral-500">Tip: mantén <kbd>Shift</kbd> al iniciar un trazo para insertarlo debajo de lo seleccionado.</p>
         {/* <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre> */}
       </div>

@@ -144,7 +144,7 @@ export default function KCmdKModal({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="w-full inline-flex items-center gap-2 p-2 mb-2 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-50"
+        className="w-full inline-flex items-center gap-2 p-2 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-50"
         title="Abrir buscador (⌘K / Ctrl+K)"
       >
         <span className="flex-1 text-left">{label}</span>
