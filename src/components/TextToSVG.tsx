@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "./KCmdModal";
-import { DownloadIcon, ErraserIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, NewIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
+import { DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FlipBackwardsIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
 import { Drawer } from "vaul";
+import ClassicMenuBar, { type Menu } from "./ClassicMenuBar";
+import { BrushSizeSelect } from "./BrushSizeSelect";
 
 type FontGoogle = [string, string];
 
@@ -50,10 +52,13 @@ type SvgStroke = Base & {
   rotation: number;           // rad
   // dimensiones intrínsecas (para preview/hittest/export)
   iw: number; ih: number;     // en unidades del viewBox (o width/height)
+  vbX: number; vbY: number; vbW: number; vbH: number; // viewBox
 };
 
 
 type Stroke = PenStroke | EraserStroke | TextStroke | SvgStroke;
+
+type Handle = "nw" | "ne" | "sw" | "se";
 
 // ==== Config / estado global ====
 const API_KEY = import.meta.env?.VITE_GOOGLE_FONTS_KEY as string | undefined;
@@ -99,9 +104,9 @@ export default function TextToSVG() {
   const dragDepthRef = useRef(0);
 
   // Herramientas / lápiz
-  const [tool, setTool] = useState<Tool>("select");
+  const [tool, setTool] = useState<Tool>("text");
   const [penColor, setPenColor] = useState<string>("#111");
-  const [penSize, setPenSize] = useState<number>(3);
+  const [penSize, setPenSize] = useState<number>(20);
 
   // Documento
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -126,6 +131,14 @@ export default function TextToSVG() {
     top: number;
     width: number;
   } | null>(null);
+
+  const resizingRef = useRef<null | {
+    id: string;
+    handle: Handle;
+    startPt: Pt;                  // donde empezó el drag
+    startBBox: { x:number; y:number; w:number; h:number };
+    startStroke: Stroke;          // snapshot
+  }>(null);
 
   // ==== Cargar lista de fuentes ====
   useEffect(() => { (async () => setFonts(await listFonts()))(); }, []);
@@ -163,6 +176,40 @@ export default function TextToSVG() {
   }, []);
 
 
+const menus: Menu[] = [
+  {
+    id: "archivo",
+    label: "Archivo",
+    items: [
+      { id: "nuevo", label: "Nuevo", shortcut: "⌘N", onSelect: clearCanvas },
+      { id: "descargar-como", label: "Descargar SVG", shortcut: "⇧⌘S", onSelect: exportSVG },
+    ],
+  },
+  {
+    id: "edicion",
+    label: "Edición",
+    items: [
+      { id: "deshacer", label: "Deshacer", shortcut: "⌘Z", onSelect: undo },
+      { separator: true, id: "sep2" },
+      { id: "cortar", label: "Cortar", shortcut: "⌘X" },
+      { id: "copiar", label: "Copiar", shortcut: "⌘C" },
+      { id: "pegar", label: "Pegar", shortcut: "⌘V" },
+      { separator: true, id: "sep3" },
+      { id: "seleccionar-todo", label: "Seleccionar todo", shortcut: "⌘A" },
+    ],
+  },
+  {
+    id: "imagen",
+    label: "Imagen",
+    items: [
+      { id: "importar-imagen", label: "Importar Imagen...", shortcut: "", onSelect: () => {
+        document.getElementById("uploadImageInputFile")?.click();
+      }},
+    ],
+  },
+];
+
+
   // ==== Helper: asegurar fuente ====
   function ensureFont(family: string) {
     const cached = fontCacheRef.current.get(family);
@@ -194,7 +241,7 @@ export default function TextToSVG() {
   }
 
   // ==== Redibujo ====
-  useEffect(() => { drawPreview(); }, [strokes, fill, bg, transparentBG, lineHeight]);
+  useEffect(() => { drawPreview(); }, [strokes, fill, bg, tool, transparentBG, lineHeight]);
 
   function getCtx(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -255,6 +302,7 @@ export default function TextToSVG() {
 
     // (Opcional) dibujar cajas de selección
     if (selectedIds.length) {
+      const dpr = window.devicePixelRatio || 1;
       ctx.save();
       ctx.strokeStyle = "#0af";
       ctx.setLineDash([4, 4]);
@@ -263,7 +311,17 @@ export default function TextToSVG() {
         if (!s) continue;
         const b = getStrokeBounds(s);
         if (!b) continue;
+        // caja
         ctx.strokeRect(b.x, b.y, b.w, b.h);
+        // handles
+        const hs = handleRects(b, dpr);
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "#0af";
+        for (const h of Object.values(hs)) {
+          ctx.fillRect(h.x, h.y, h.w, h.h);
+          ctx.strokeRect(h.x, h.y, h.w, h.h);
+        }
       }
       ctx.restore();
     }
@@ -460,19 +518,115 @@ export default function TextToSVG() {
       return;
     }
 
-    // tool === "select"
-    const id = hitTest(p);
-    if (id) {
-      setSelectedIds([id]);
-      draggingRef.current = { id, last: p };
-    } else {
-      setSelectedIds([]);
+    // 3) SELECT: primero mira si estás sobre UN HANDLE del elemento ya seleccionado
+    if (tool === "select") {
+      const selId = selectedIds[0] ?? null;
+      if (selId) {
+        const s = strokes.find(st => st.id === selId);
+        const b = s ? getStrokeBounds(s) : null;
+        if (s && b) {
+          const dpr = window.devicePixelRatio || 1;
+          const hs = handleRects(b, dpr);
+          const hitHandle =
+            pointInRect(p, hs.nw) ? "nw" :
+            pointInRect(p, hs.ne) ? "ne" :
+            pointInRect(p, hs.sw) ? "sw" :
+            pointInRect(p, hs.se) ? "se" : null;
+          if (hitHandle) {
+            // ← SOLO si realmente tocaste un handle, entra a resize
+            resizingRef.current = {
+              id: s.id,
+              handle: hitHandle,
+              startPt: p,
+              startBBox: b,
+              startStroke: JSON.parse(JSON.stringify(s)) as Stroke,
+            };
+            return; // ¡ojo! salimos aquí SOLO si era un handle
+          }
+        }
+      }
+
+      // 4) Si no tocaste handle: hit-test normal para seleccionar y comenzar drag
+      const id = hitTest(p);
+      if (id) {
+        setSelectedIds([id]);
+        draggingRef.current = { id, last: p };
+      } else {
+        setSelectedIds([]);
+      }
+      return;
     }
   }
 
 
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = e.currentTarget;
+
+    // RESIZE activo
+    if (resizingRef.current) {
+      const r = resizingRef.current;
+      const p = getCanvasPos(e.currentTarget, e);
+      const { startBBox: b, startStroke: s0, handle } = r;
+
+      // ancla = esquina opuesta al handle
+      let ax: number, ay: number;
+      if (handle === "nw") { ax = b.x + b.w; ay = b.y + b.h; }
+      else if (handle === "ne") { ax = b.x; ay = b.y + b.h; }
+      else if (handle === "sw") { ax = b.x + b.w; ay = b.y; }
+      else { /* se */ ax = b.x; ay = b.y; }
+
+      // tamaño nuevo uniformemente (mantén proporción)
+      const newW = Math.max(2, Math.abs(p.x - ax));
+      const newH = Math.max(2, Math.abs(p.y - ay));
+      const f = Math.max(0.01, Math.min(newW / b.w, newH / b.h)); // factor
+
+      setStrokes(prev => prev.map(st => {
+        if (st.id !== r.id) return st;
+
+        // SVG: escalar y reposicionar para que la esquina ancla quede fija
+        if (st.type === "svg") {
+          const sv0 = s0 as SvgStroke;
+          const sv: SvgStroke = { ...st as SvgStroke, scale: Math.max(0.01, sv0.scale * f) };
+          const w2 = b.w * f, h2 = b.h * f;
+          let nx: number, ny: number;
+          if (handle === "nw") { nx = ax - w2; ny = ay - h2; }
+          else if (handle === "ne") { nx = ax; ny = ay - h2; }
+          else if (handle === "sw") { nx = ax - w2; ny = ay; }
+          else { /* se */ nx = ax; ny = ay; }
+          sv.x = nx; sv.y = ny;
+          return sv;
+        }
+
+        // TEXT: cambia size y corrige x/y para que el bbox final sea el esperado
+        if (st.type === "text") {
+          const ts0 = s0 as TextStroke;
+          let cand: TextStroke = { ...(st as TextStroke), size: Math.max(1, ts0.size * f) };
+          // bbox con x/y temporales
+          const bTmp = getStrokeBounds(cand)!;
+
+          // bbox deseado con ancla fija
+          const w2 = b.w * f, h2 = b.h * f;
+          let targetX: number, targetY: number;
+          if (handle === "nw") { targetX = ax - w2; targetY = ay - h2; }
+          else if (handle === "ne") { targetX = ax; targetY = ay - h2; }
+          else if (handle === "sw") { targetX = ax - w2; targetY = ay; }
+          else { /* se */           targetX = ax;       targetY = ay; }
+
+          // desplaza para alinear bbox.tmp a bbox.target
+          const dx = targetX - bTmp.x;
+          const dy = targetY - bTmp.y;
+          cand = { ...cand, x: (cand.x + dx), y: (cand.y + dy) };
+          return cand;
+        }
+
+        // otros tipos: sin cambios
+        return st;
+      }));
+
+      drawPreview();
+      return;
+    }
+
 
     // DIBUJO ACTIVO (lápiz/goma): añadir puntos
     if (drawingRef.current) {
@@ -507,6 +661,12 @@ export default function TextToSVG() {
   }
 
   function onPointerUp() {
+    if (resizingRef.current) {
+      resizingRef.current = null;
+      drawPreview();
+      return;
+    }
+
     if (drawingRef.current) {
       drawingRef.current = null;          // cierra trazo en curso
       // opcional: forzar rerender para “congelar” último segmento
@@ -778,99 +938,46 @@ export default function TextToSVG() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // Generar paths y máscara a partir de strokes
-    const penEls: string[] = [];
-    const eraserMask: string[] = [];
-    const textEls: string[] = [];
+    const sorted = [...strokes].filter(s => s.visible !== false).sort((a, b) => a.z - b.z);
 
+    // ---- PASO 1: calcular bounds (solo contenido visible, sin goma)
     let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
-
-    const pushBounds = (bx1: number, by1: number, bx2: number, by2: number) => {
-      xMin = Math.min(xMin, bx1);
-      yMin = Math.min(yMin, by1);
-      xMax = Math.max(xMax, bx2);
-      yMax = Math.max(yMax, by2);
+    const pushBounds = (x1:number,y1:number,x2:number,y2:number) => {
+      xMin = Math.min(xMin, x1); yMin = Math.min(yMin, y1);
+      xMax = Math.max(xMax, x2); yMax = Math.max(yMax, y2);
     };
 
-    const sorted = [...strokes].filter(s=>s.visible!==false).sort((a,b)=>a.z-b.z);
-
-    // lápiz detrás
     for (const s of sorted) {
-      if (s.type !== "pen") continue;
-      if (s.points.length < 2) continue;
-      let d = `M ${s.points[0].x} ${s.points[0].y}`;
-      let minX = s.points[0].x, minY = s.points[0].y, maxX = s.points[0].x, maxY = s.points[0].y;
-      for (let i = 1; i < s.points.length; i++) {
-        const p = s.points[i];
-        d += ` L ${p.x} ${p.y}`;
-        if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+      if (s.type === "pen") {
+        if (s.points.length < 2) continue;
+        let minX = s.points[0].x, minY = s.points[0].y, maxX = minX, maxY = minY;
+        for (let i = 1; i < s.points.length; i++) {
+          const p = s.points[i];
+          if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+        }
+        const h = s.size / 2;
+        pushBounds(minX - h, minY - h, maxX + h, maxY + h);
       }
-      const h = s.size / 2;
-      pushBounds(minX - h, minY - h, maxX + h, maxY + h);
-      penEls.push(
-        `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`
-      );
-    }
-
-    // bounds (antes de construir el string)
-    for (const s of sorted) {
+      if (s.type === "text") {
+        const f = fontCacheRef.current.get(s.fontFamily);
+        if (!f) continue;
+        const lines = (s.text || "").split("\n").map(l => l || " ");
+        let y = s.y;
+        for (const line of lines) {
+          const x = s.x + alignShiftX(f, line, s.size, s.align);
+          const p = f.getPath(line, x, y, s.size);
+          const b = p.getBoundingBox();
+          pushBounds(b.x1, b.y1, b.x2, b.y2);
+          y += s.size * s.lineHeight;
+        }
+      }
       if (s.type === "svg") {
-        const sv = s as SvgStroke;
-        const w = sv.iw * sv.scale, h = sv.ih * sv.scale;
-        pushBounds(sv.x, sv.y, sv.x + w, sv.y + h);
+        const w = (s.iw ?? 100) * (s.scale ?? 1);
+        const h = (s.ih ?? 100) * (s.scale ?? 1);
+        pushBounds(s.x, s.y, s.x + w, s.y + h);
       }
     }
-
-
-    // texto encima
-    for (const s of sorted) {
-      if (s.type !== "text") continue;
-      const f = fontCacheRef.current.get(s.fontFamily);
-      if (!f) continue; // aún no cargado
-      const lines = s.text.split("\n").map(l => l.length ? l : " ");
-      let y = s.y;
-      for (const line of lines) {
-        const x = s.x + alignShiftX(f, line, s.size, s.align);
-        const p = f.getPath(line, x, y, s.size);
-        const b = p.getBoundingBox();
-        pushBounds(b.x1, b.y1, b.x2, b.y2);
-        textEls.push(`<path d="${p.toPathData(3)}" fill="${s.fill}"/>`);
-        y += s.size * s.lineHeight;
-      }
-    }
-
-    // goma → máscara negra
-    for (const s of sorted) {
-      if (s.type !== "eraser" || s.points.length < 2) continue;
-      let d = `M ${s.points[0].x} ${s.points[0].y}`;
-      let minX = s.points[0].x, minY = s.points[0].y, maxX = s.points[0].x, maxY = s.points[0].y;
-      for (let i = 1; i < s.points.length; i++) {
-        const p = s.points[i];
-        d += ` L ${p.x} ${p.y}`;
-        if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
-      }
-      // La goma no añade a bounds visibles
-      eraserMask.push(`<path d="${d}" fill="none" stroke="black" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`);
-    }
-
-    const svgEls: string[] = [];
-    for (const s of sorted) {
-      if (s.type !== "svg") continue;
-      const sv = s as SvgStroke;
-
-      // Transform para posicionarlo (recuerda que ya hay un translate global T aplicado fuera)
-      const tx = sv.x - xMin, ty = sv.y - yMin;
-      const rot = sv.rotation ? ` rotate(${(sv.rotation*180/Math.PI).toFixed(3)})` : "";
-      // Opción A (simple): incrusta el SVG entero anidado (mantiene todo, defs, estilos)
-      svgEls.push(
-        `    <g transform="translate(${tx},${ty}) scale(${sv.scale})${rot}">\n` +
-        `      ${sanitizeForEmbed(sv.svg)}\n` +
-        `    </g>`
-      );
-    }
-
 
     if (!isFinite(xMin) || !isFinite(yMin) || !isFinite(xMax) || !isFinite(yMax)) {
       alert("No hay contenido visible para exportar.");
@@ -881,32 +988,89 @@ export default function TextToSVG() {
     const vbH = Math.max(1, Math.ceil(yMax - yMin));
     const T = `transform="translate(${-xMin},${-yMin})"`;
 
+    // ---- PASO 2: strings en orden de z
+    const contentEls: string[] = [];
+    const eraserMask: string[] = [];
+
+    for (const s of sorted) {
+      if (s.type === "pen") {
+        if (s.points.length < 2) continue;
+        let d = `M ${s.points[0].x} ${s.points[0].y}`;
+        for (let i = 1; i < s.points.length; i++) {
+          const p = s.points[i];
+          d += ` L ${p.x} ${p.y}`;
+        }
+        contentEls.push(
+          `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`
+        );
+        continue;
+      }
+
+      if (s.type === "text") {
+        const f = fontCacheRef.current.get(s.fontFamily);
+        if (!f) continue;
+        const lines = (s.text || "").split("\n").map(l => l || " ");
+        let y = s.y;
+        for (const line of lines) {
+          const x = s.x + alignShiftX(f, line, s.size, s.align);
+          const p = f.getPath(line, x, y, s.size);
+          contentEls.push(`<path d="${p.toPathData(3)}" fill="${s.fill}"/>`);
+          y += s.size * s.lineHeight;
+        }
+        continue;
+      }
+
+      if (s.type === "svg") {
+        const inner = extractSvgInner(s.svg);              // <- sin prolog/doctype/comments
+        const vbX = s.vbX ?? 0, vbY = s.vbY ?? 0;
+        const rot = s.rotation ? ` rotate(${(s.rotation * 180 / Math.PI).toFixed(3)})` : "";
+        // IMPORTANTE: usa coordenadas ABSOLUTAS aquí; el grupo exterior ya tiene T = translate(-xMin,-yMin)
+        contentEls.push(
+          `    <g transform="translate(${s.x},${s.y}) scale(${s.scale})${rot} translate(${-vbX},${-vbY})">\n` +
+          `      ${inner}\n` +
+          `    </g>`
+        );
+        continue;
+      }
+
+      if (s.type === "eraser") {
+        if (s.points.length < 2) continue;
+        let d = `M ${s.points[0].x} ${s.points[0].y}`;
+        for (let i = 1; i < s.points.length; i++) {
+          const p = s.points[i];
+          d += ` L ${p.x} ${p.y}`;
+        }
+        eraserMask.push(
+          `<path d="${d}" fill="none" stroke="black" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`
+        );
+        continue;
+      }
+    }
+
     const bgRect = transparentBG ? "" : `  <rect x="0" y="0" width="${vbW}" height="${vbH}" fill="${bg}"/>\n`;
+
     const mask =
-`  <defs>
-    <mask id="eraserMask" maskUnits="userSpaceOnUse">
-      <rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>
-      <g ${T}>
-${eraserMask.join("\n")}
-      </g>
-    </mask>
-  </defs>`;
+  `  <defs>
+      <mask id="eraserMask" maskUnits="userSpaceOnUse">
+        <rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>
+        <g ${T}>
+  ${eraserMask.join("\n")}
+        </g>
+      </mask>
+    </defs>`;
 
     const maskedOpen = eraseBackgroundToo
       ? `  <g mask="url(#eraserMask)">\n${bgRect}    <g ${T}>\n`
       : `  ${bgRect}  <g mask="url(#eraserMask)">\n    <g ${T}>\n`;
 
     const svg =
-`<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW} ${vbH}" width="${vbW}" height="${vbH}">
-${mask}
-${maskedOpen}
-${penEls.join("\n")}
-${svgEls.join("\n")}
-${textEls.join("\n")}
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW} ${vbH}" width="${vbW}" height="${vbH}">
+  ${mask}
+  ${maskedOpen}
+  ${contentEls.join("\n")}
+      </g>
     </g>
-  </g>
-</svg>`;
+  </svg>`;
 
     const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -916,6 +1080,7 @@ ${textEls.join("\n")}
     a.click();
     URL.revokeObjectURL(url);
   }
+
 
   // ==== Upload TTF/OTF y añadirlo al cache como “Custom” ====
   function onUploadTTF(e: React.ChangeEvent<HTMLInputElement>) {
@@ -937,13 +1102,26 @@ ${textEls.join("\n")}
     });
   }
 
-  function sanitizeForEmbed(src: string) {
-    // elimina prolog y doctype; deja el <svg> como está
-    return src
-      .replace(/<\\?xml[^>]*>/gi, "")
-      .replace(/<!DOCTYPE[^>]*>/gi, "")
-      .trim();
-  }
+function sanitizeForEmbed(src: string) {
+  let s = src.replace(/^\uFEFF/, "");
+  s = s.replace(/<\?xml[\s\S]*?\?>/gi, "");     // prologs
+  s = s.replace(/<\?[\s\S]*?\?>/g, "");
+  s = s.replace(/<!DOCTYPE[\s\S]*?>/gi, "");
+  s = s.replace(/<!--[\s\S]*?-->/g, "");        // comentarios
+  s = s.replace(/<metadata[\s\S]*?<\/metadata>/gi, "");
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, "");
+  s = s.replace(/\s+on[a-z\-]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "");
+  return s.trim();
+}
+
+// Devuelve innerHTML del <svg> (sin la etiqueta <svg>)
+function extractSvgInner(svg: string) {
+  const s = sanitizeForEmbed(svg);
+  const m = s.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i);
+  return m ? m[1] : s; // si no hay <svg>, devuelve tal cual
+}
+
+
 
   // z helpers
   function getMaxZ(arr: Stroke[] = strokes) {
@@ -998,134 +1176,234 @@ ${textEls.join("\n")}
     });
   }
 
+  function handleRects(b: {x:number;y:number;w:number;h:number}, dpr=1) {
+    const s = 8 * dpr; // tamaño del handle en px canvas
+    return {
+      nw: { x: b.x - s/2,         y: b.y - s/2,         w: s, h: s },
+      ne: { x: b.x + b.w - s/2,   y: b.y - s/2,         w: s, h: s },
+      sw: { x: b.x - s/2,         y: b.y + b.h - s/2,   w: s, h: s },
+      se: { x: b.x + b.w - s/2,   y: b.y + b.h - s/2,   w: s, h: s },
+    } as const;
+  }
+
+  function pointInRect(p: Pt, r: {x:number;y:number;w:number;h:number}) {
+    return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+  }
 
   // ==== JSX ====
   return (
     <div className="w-full h-dvh max-w-6xl mx-auto p-2 grid gap-1 grid-rows-[auto_1fr_auto]">
+      <input id="uploadImageInputFile" type="file" className="hidden" accept=".svg" onChange={onUploadSVG} />
       <div>
-        <div className="flex flex-wrap items-center gap-2 mb-2">
-          <h1>
-            <img src="/favicon.svg" className="w-14" alt="Editor Text + Dibujo → SVG" />
-            <span className="hidden">Editor Text + Dibujo → SVG</span>
-          </h1>
-          { tool === "text" && (
-            <>
-              <div className="w-full max-w-xs sm:col-span-4">
-                <Label>Fuente (Google Fonts)</Label>
-                <KCmdKModal
-                  title="Fuente (Google Fonts)"
-                  label={fontFamily || "Fuente"}
-                  fonts={fonts}
-                  handleFontChange={(f) => { handleFontChange(f); }}
-                  API_KEY={API_KEY}
-                />
-              </div>
-
-              <div>
-                <Label>&nbsp;</Label>
-                <label className="px-2 py-1 border rounded cursor-pointer">
-                  <PlusIcon className="inline size-6 mr-1" />
-                  <input type="file" className="hidden" accept=".ttf,.otf" onChange={onUploadTTF} />
-                </label>
-              </div>
-              <div className="col-span-2 sm:col-span-1">
-                <Label>Line height</Label>
-                <input
-                  type="number"
-                  step="0.05"
-                  className="w-full p-2 rounded-lg border border-neutral-300"
-                  min={0.8}
-                  max={3}
-                  value={lineHeight}
-                  onChange={(e) => setLineHeight(+e.target.value || 1.2)}
-                />
-              </div>
-
-              <div>
-                <Label>Color de texto</Label>
-                <input
-                  type="color"
-                  className="w-full h-10 p-1 rounded-lg border border-neutral-300"
-                  value={fill}
-                  onChange={(e) => setFill(e.target.value)}
-                />
-              </div>
-            </>
-          )}
-
-          { (tool === "pen" || tool === "eraser") && (
-            <>
-              <div>
-                <Label>Pencil Color</Label>
-                <input
-                  type="color"
-                  className="w-full h-10 p-1 rounded-lg border border-neutral-300"
-                  value={penColor}
-                  onChange={(e) => setPenColor(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <Label>Pencil Width</Label>
-                <input
-                  type="number"
-                  step="1"
-                  className="w-full p-2 rounded-lg border border-neutral-300"
-                  min={1}
-                  max={40}
-                  value={penSize}
-                  onChange={(e) => setPenSize(+e.target.value || 3)}
-                />
-              </div>
-            </>
-          )}
-
-          { tool === "select" && (
-            <div>
-              <Label>Herramientas de selección</Label>
-              <div className="flex items-center gap-2 h-11">
-                <button onClick={() => bringToFront(selectedIds)} className="px-2 py-1 border rounded">
-                  <LayerUpIcon className="inline size-6" />
-                </button>
-                <button onClick={() => sendToBack(selectedIds)} className="px-2 py-1 border rounded">
-                  <LayerDownIcon className="inline size-6" />
-                </button>
-                <button onClick={() => bringForward(selectedIds)} className="px-2 py-1 border rounded">
-                  <SortAmountUpIcon className="inline size-6" />
-                </button>
-                <button onClick={() => sendBackward(selectedIds)} className="px-2 py-1 border rounded">
-                  <SortAmountDownIcon className="inline size-6" />
-                </button>
-                <button onClick={deleteSelected} className="px-2 py-1 rounded border">
-                  <TrashIcon className="inline size-6" />
-                </button>
-              </div>
+        <div className="grid grid-cols-1 gap-1">
+          <div className="flex w-full">
+            <h1>
+              <img src="/favicon.svg" className="w-8" alt="Editor Text + Dibujo → SVG" />
+              <span className="hidden">Editor Text + Dibujo → SVG</span>
+            </h1>
+            <div className="flex-grow ml-4">
+              <ClassicMenuBar
+                menus={menus}
+                onAction={(menuId, itemId) => {
+                  // Replace this with your logic
+                  console.log(`Action: ${menuId} -> ${itemId}`);
+                }}
+              />
             </div>
-          )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mb-2">
 
-          <div className="ml-auto">
-            <Label>&nbsp;</Label>
-            <div className="flex items-center gap-2">
+            { tool === "text" && (
+              <>
+                <div className="w-full max-w-32 sm:max-w-xs">
+                  <Label>Fuente (Google Fonts)</Label>
+                  <KCmdKModal
+                    title="Fuente (Google Fonts)"
+                    label={fontFamily || "Fuente"}
+                    fonts={fonts}
+                    handleFontChange={(f) => { handleFontChange(f); }}
+                    API_KEY={API_KEY}
+                  />
+                </div>
+
+                <div className="w-14 sm:w-auto">
+                  <Label>Nueva</Label>
+                  <div className="flex items-center gap-2 h-11">
+                    <label className="px-2 py-1 border rounded cursor-pointer">
+                      <PlusIcon className="inline size-6" />
+                      <input type="file" className="hidden" accept=".ttf,.otf" onChange={onUploadTTF} />
+                    </label>
+                  </div>
+                </div>
+                <div className="w-14 sm:w-auto">
+                  <Label>Line height</Label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    className="w-full p-2 rounded-lg border border-neutral-300"
+                    min={0.8}
+                    max={3}
+                    value={lineHeight}
+                    onChange={(e) => setLineHeight(+e.target.value || 1.2)}
+                  />
+                </div>
+
+                <div className="w-14 sm:w-auto">
+                  <Label>Color de texto</Label>
+                  <input
+                    type="color"
+                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
+                    value={fill}
+                    onChange={(e) => setFill(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            { (tool === "pen" || tool === "eraser") && (
+              <>
+                <div className="w-14 sm:w-auto">
+                  <Label>Pencil Color</Label>
+                  <input
+                    type="color"
+                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
+                    value={penColor}
+                    onChange={(e) => setPenColor(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <Label>Pencil Width</Label>
+                  <BrushSizeSelect value={penSize} color={penColor} onChange={setPenSize} className="w-44" />
+                </div>
+              </>
+            )}
+
+            { tool === "select" && (
+              <div>
+                <Label>Herramientas de selección</Label>
+                <div className="flex items-center gap-2 h-11">
+                  <button onClick={() => bringToFront(selectedIds)} className="px-2 py-1 border rounded">
+                    <LayerUpIcon className="inline size-6" />
+                  </button>
+                  <button onClick={() => sendToBack(selectedIds)} className="px-2 py-1 border rounded">
+                    <LayerDownIcon className="inline size-6" />
+                  </button>
+                  <button onClick={() => bringForward(selectedIds)} className="px-2 py-1 border rounded">
+                    <SortAmountUpIcon className="inline size-6" />
+                  </button>
+                  <button onClick={() => sendBackward(selectedIds)} className="px-2 py-1 border rounded">
+                    <SortAmountDownIcon className="inline size-6" />
+                  </button>
+                  <button onClick={deleteSelected} className="px-2 py-1 rounded border">
+                    <TrashIcon className="inline size-6" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="hidden md:flex items-center ml-auto gap-2">
               <Drawer.Root direction="right">
                 <Drawer.Trigger className="px-2 py-1 rounded border">
                   <LayerIcon className="inline size-6" />
                 </Drawer.Trigger>
                 <Drawer.Portal>
-                  <Drawer.Content>
-                    <Drawer.Title>Title</Drawer.Title>
+                  <Drawer.Content
+                    className="right-2 top-2 bottom-2 fixed z-10 outline-none w-[310px] flex"
+                    style={{ '--initial-transform': 'calc(100% + 8px)' } as React.CSSProperties}
+                  >
+                    <div className="bg-zinc-50 h-full w-full grow p-5 flex flex-col rounded-[16px]">
+                      <div className="max-w-md mx-auto">
+                        <Drawer.Title className="font-medium mb-2 text-zinc-900">
+                          Capas y elementos del lienzo
+                        </Drawer.Title>
+                        <Drawer.Description className="text-zinc-600 mb-2">
+                          Aquí puedes ver y gestionar todos los elementos del lienzo.
+                        </Drawer.Description>
+                        <ul>
+                          {strokes.length === 0 && (
+                            <li className="text-sm text-zinc-500 italic">No hay elementos</li>
+                          )}
+                          {strokes.slice().sort((a,b)=>b.z - a.z).map(s => (
+                            <li key={s.id} className={`flex items-center justify-between mb-1 p-2 rounded hover:bg-zinc-100 ${selectedIds.includes(s.id) ? 'bg-zinc-200' : ''}`}>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.includes(s.id)}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setSelectedIds(prev => {
+                                      if (checked) {
+                                        return [...prev, s.id];
+                                      } else {
+                                        return prev.filter(id => id !== s.id);
+                                      }
+                                    });
+                                  }}
+                                />
+                                <span className="text-sm">
+                                  {s.type === "text" && (
+                                    <>
+                                      <TextIcon className="inline size-4 mr-1" />
+                                      {s.text.split("\n")[0].slice(0,20) || "<vacio>"}
+                                    </>
+                                  )}
+                                  {s.type === "pen" && (
+                                    <>
+                                      <PaintBrushIcon className="inline size-4 mr-1" />
+                                      Dibujo
+                                    </>
+                                  )}
+                                  {s.type === "eraser" && (
+                                    <>
+                                      <ErraserIcon className="inline size-4 mr-1" />
+                                      Goma
+                                    </>
+                                  )}
+                                  {s.type === "svg" && (
+                                    <>
+                                      <img src="/svg-icon.svg" className="inline size-4 mr-1" alt="SVG" />
+                                      SVG
+                                    </>
+                                  )}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => {
+                                    setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, visible: !(st.visible ?? true) } : st));
+                                  }}
+                                  title={s.visible === false ? "Mostrar" : "Ocultar"}
+                                >
+                                  {s.visible === false
+                                    ? <EyeClosedIcon className="inline size-5 text-zinc-400" />
+                                    : <EyeOpenIcon className="inline size-5 text-zinc-700" />
+                                  }
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, locked: !(st.locked ?? false) } : st));
+                                  }}
+                                  title={s.locked ? "Desbloquear" : "Bloquear"}
+                                >
+                                  {s.locked
+                                    ? <LockClosedIcon className="inline size-5 text-zinc-400" />
+                                    : <LockOpenIcon className="inline size-5 text-zinc-700" />
+                                  }
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
                   </Drawer.Content>
-                  <Drawer.Overlay />
+                  <Drawer.Overlay className="fixed inset-0 bg-black/40" />
                 </Drawer.Portal>
               </Drawer.Root>
-              <label className="px-2 py-1 border rounded ml-auto">
-                <ImagePlusIcon className="inline size-6" />
-                <input type="file" className="hidden" accept=".svg" onChange={onUploadSVG} />
-              </label>
+
               <button onClick={undo} className="px-2 py-1 rounded border">
                 <FlipBackwardsIcon className="inline size-6" />
-              </button>
-              <button onClick={clearCanvas} className="px-2 py-1 text-sm rounded border">
-                <NewIcon className="inline size-6" /> Nuevo
               </button>
               <span className="w-px h-full bg-gray-400">&nbsp;</span>
               <button
@@ -1155,32 +1433,32 @@ ${textEls.join("\n")}
             className={`px-3 py-2 rounded-lg ${tool === "select" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
             onClick={() => setTool("select")}
           >
-            <SquareDashedIcon className="size-8" />
+            <SquareDashedIcon className="size-4 md:size-8" />
           </button>
           <button
             type="button"
             className={`px-3 py-2 rounded-lg ${tool === "text" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
             onClick={() => setTool("text")}
           >
-            <TextIcon className="size-8" />
+            <TextIcon className="size-4 md:size-8" />
           </button>
           <button
             type="button"
             className={`px-3 py-2 rounded-lg ${tool === "pen" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
             onClick={() => setTool("pen")}
           >
-            <PaintBrushIcon className="size-8" />
+            <PaintBrushIcon className="size-4 md:size-8" />
           </button>
           <button
             type="button"
             className={`px-3 py-2 rounded-lg ${tool === "eraser" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
             onClick={() => setTool("eraser")}
           >
-            <ErraserIcon className="size-8" />
+            <ErraserIcon className="size-4 md:size-8" />
           </button>
           <input
             type="color"
-            className={`size-14 p-1 rounded-lg border border-neutral-300 bg-neutral-200 overflow-hidden ${transparentBG ? 'relative before:content-[\'\'] before:absolute before:left-2 before:bottom-2 before:w-13 before:h-0.5 before:bg-red-500 before:-rotate-43 before:origin-left' : ''}`}
+            className={`size-10 md:size-14 p-1 rounded-lg border border-neutral-300 bg-neutral-200 overflow-hidden ${transparentBG ? 'relative before:content-[\'\'] before:absolute before:left-2 before:bottom-2 before:w-8 md:before:w-13 before:h-0.5 before:bg-red-500 before:-rotate-43 before:origin-left' : ''}`}
             disabled={transparentBG}
             value={transparentBG ? '#ffffff' : bg}
             onChange={(e)=>setBg(e.target.value)}

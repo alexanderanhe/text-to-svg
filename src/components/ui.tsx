@@ -1,5 +1,5 @@
 export const Label: React.FC<{ htmlFor?: string; children: React.ReactNode }>=({ htmlFor, children })=> (
-  <label htmlFor={htmlFor} className="block text-left text-sm font-medium mb-1">{children}</label>
+  <label htmlFor={htmlFor} className="hidden sm:block text-left text-sm font-medium mb-1">{children}</label>
 );
 
 export const SquareDashedIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
@@ -103,5 +103,30 @@ export const PlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
 export const LayerIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg {...props} width="800px" height="800px" viewBox="0 0 76.01 76.01" version="1.1" baseProfile="full" enableBackground="new 0 0 76.01 76.01">
     <path fill="currentColor" fillOpacity="1" strokeWidth="0.2" strokeLinejoin="round" d="M 57.0079,38.0053L 38.0053,47.5066L 19.0027,38.0053L 25.3369,34.8382L 38.0053,41.1724L 50.6737,34.8382L 57.0079,38.0053 Z M 38.0053,19.0027L 57.0079,28.504L 38.0053,38.0053L 19.0026,28.504L 38.0053,19.0027 Z M 57.0079,47.5066L 38.0053,57.008L 19.0026,47.5066L 25.3369,44.3395L 38.0053,50.6737L 50.6737,44.3395L 57.0079,47.5066 Z "/>
+  </svg>
+);
+
+export const EyeOpenIcon : React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg {...props} width="800px" height="800px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M15.0007 12C15.0007 13.6569 13.6576 15 12.0007 15C10.3439 15 9.00073 13.6569 9.00073 12C9.00073 10.3431 10.3439 9 12.0007 9C13.6576 9 15.0007 10.3431 15.0007 12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12.0012 5C7.52354 5 3.73326 7.94288 2.45898 12C3.73324 16.0571 7.52354 19 12.0012 19C16.4788 19 20.2691 16.0571 21.5434 12C20.2691 7.94291 16.4788 5 12.0012 5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+);
+
+export const EyeClosedIcon : React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg {...props} width="800px" height="800px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M2.99902 3L20.999 21M9.8433 9.91364C9.32066 10.4536 8.99902 11.1892 8.99902 12C8.99902 13.6569 10.3422 15 11.999 15C12.8215 15 13.5667 14.669 14.1086 14.133M6.49902 6.64715C4.59972 7.90034 3.15305 9.78394 2.45703 12C3.73128 16.0571 7.52159 19 11.9992 19C13.9881 19 15.8414 18.4194 17.3988 17.4184M10.999 5.04939C11.328 5.01673 11.6617 5 11.9992 5C16.4769 5 20.2672 7.94291 21.5414 12C21.2607 12.894 20.8577 13.7338 20.3522 14.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+);
+
+export const LockOpenIcon : React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg {...props} width="800px" height="800px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M16.584 6C15.8124 4.2341 14.0503 3 12 3C9.23858 3 7 5.23858 7 8V10.0288M7 10.0288C7.47142 10 8.05259 10 8.8 10H15.2C16.8802 10 17.7202 10 18.362 10.327C18.9265 10.6146 19.3854 11.0735 19.673 11.638C20 12.2798 20 13.1198 20 14.8V16.2C20 17.8802 20 18.7202 19.673 19.362C19.3854 19.9265 18.9265 20.3854 18.362 20.673C17.7202 21 16.8802 21 15.2 21H8.8C7.11984 21 6.27976 21 5.63803 20.673C5.07354 20.3854 4.6146 19.9265 4.32698 19.362C4 18.7202 4 17.8802 4 16.2V14.8C4 13.1198 4 12.2798 4.32698 11.638C4.6146 11.0735 5.07354 10.6146 5.63803 10.327C5.99429 10.1455 6.41168 10.0647 7 10.0288Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+);
+
+export const LockClosedIcon : React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg {...props} width="800px" height="800px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M3 3L21 21M17 10V8C17 5.23858 14.7614 3 12 3C11.0283 3 10.1213 3.27719 9.35386 3.75681M7.08383 7.08338C7.02878 7.38053 7 7.6869 7 8V10.0288M19.5614 19.5618C19.273 20.0348 18.8583 20.4201 18.362 20.673C17.7202 21 16.8802 21 15.2 21H8.8C7.11984 21 6.27976 21 5.63803 20.673C5.07354 20.3854 4.6146 19.9265 4.32698 19.362C4 18.7202 4 17.8802 4 16.2V14.8C4 13.1198 4 12.2798 4.32698 11.638C4.6146 11.0735 5.07354 10.6146 5.63803 10.327C5.99429 10.1455 6.41168 10.0647 7 10.0288M19.9998 14.4023C19.9978 12.9831 19.9731 12.227 19.673 11.638C19.3854 11.0735 18.9265 10.6146 18.362 10.327C17.773 10.0269 17.0169 10.0022 15.5977 10.0002M10 10H8.8C8.05259 10 7.47142 10 7 10.0288" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
 );
