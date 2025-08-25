@@ -1,2 +1,3 @@
 icons
 https://www.svgrepo.com/collection/dazzle-line-icons/
+https://www.svgrepo.com/collection/modern-ui-icons/

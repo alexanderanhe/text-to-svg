@@ -52,7 +52,7 @@ type SvgStroke = Base & {
   rotation: number;           // rad
   // dimensiones intrínsecas (para preview/hittest/export)
   iw: number; ih: number;     // en unidades del viewBox (o width/height)
-  vbX: number; vbY: number; vbW: number; vbH: number; // viewBox
+  vbX?: number; vbY?: number; vbW?: number; vbH?: number; // viewBox
 };
 
 
@@ -1110,7 +1110,7 @@ function sanitizeForEmbed(src: string) {
   s = s.replace(/<!--[\s\S]*?-->/g, "");        // comentarios
   s = s.replace(/<metadata[\s\S]*?<\/metadata>/gi, "");
   s = s.replace(/<script[\s\S]*?<\/script>/gi, "");
-  s = s.replace(/\s+on[a-z\-]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "");
+  s = s.replace(/\s+on[a-z-]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "");
   return s.trim();
 }
 
