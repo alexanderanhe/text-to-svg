@@ -1,64 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
-import KCmdKModal from "./KCmdModal";
-import { DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FlipBackwardsIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, TextIcon, TrashIcon } from "./ui";
+import KCmdKModal from "../KCmdModal";
+import { CircleIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
 import { Drawer } from "vaul";
-import ClassicMenuBar, { type Menu } from "./ClassicMenuBar";
-import { BrushSizeSelect } from "./BrushSizeSelect";
+import ClassicMenuBar, { type Menu } from "../ClassicMenuBar";
+import { BrushSizeSelect } from "../BrushSizeSelect";
+import type { Tool, Pt, PenStroke, EraserStroke, TextStroke, SvgStroke, Stroke, Handle, FontGoogle, ShapeKind, ShapeStroke } from "../../types/strokes";
+import { ensureFont, ensureFontAsync, listFonts } from "../../utils/fontUtils";
+import { isFontFile, isSvgFile } from "../../utils/fileUtils";
+import { extractSvgInner, parseSVGMeta } from "../../utils/svgUtils";
+import { getCanvasPos } from "../../utils/canvasUtils";
+import { alignShiftX, boundsWithFont, getMaxZ, normalizeZ } from "../../utils/helpers";
 
-type FontGoogle = [string, string];
-
-// ==== Modelo unificado ====
-type Tool = "select" | "text" | "pen" | "eraser";
-type Pt = { x: number; y: number };
-
-type Base = {
-  id: string;
-  z: number;
-  visible: boolean;
-  locked: boolean;
-};
-
-type PenStroke = Base & {
-  type: "pen";
-  color: string;
-  size: number;
-  points: Pt[];
-};
-
-type EraserStroke = Base & {
-  type: "eraser";
-  size: number;
-  points: Pt[];
-};
-
-type TextStroke = Base & {
-  type: "text";
-  text: string;
-  fontFamily: string;
-  fill: string;
-  lineHeight: number; // múltiplo
-  x: number; y: number; // baseline primera línea
-  size: number;         // equivalente a fontSize en px canvas
-  rotation: number;     // radianes (no usado ahora)
-  align: "left" | "center" | "right";
-};
-
-type SvgStroke = Base & {
-  type: "svg";
-  svg: string;                // svg completo como texto
-  x: number; y: number;
-  scale: number;              // 1 = tamaño intrínseco
-  rotation: number;           // rad
-  // dimensiones intrínsecas (para preview/hittest/export)
-  iw: number; ih: number;     // en unidades del viewBox (o width/height)
-  vbX?: number; vbY?: number; vbW?: number; vbH?: number; // viewBox
-};
-
-
-type Stroke = PenStroke | EraserStroke | TextStroke | SvgStroke;
-
-type Handle = "nw" | "ne" | "sw" | "se";
+const AA_MARGIN = 1; // 1px de seguridad contra antialias/decimales
 
 // ==== Config / estado global ====
 const API_KEY = import.meta.env?.VITE_GOOGLE_FONTS_KEY as string | undefined;
@@ -74,19 +28,6 @@ const FALLBACK_FONTS = [
 
 // Si quieres precargar alguna local:
 const FALLBACK_FONT_URL = "/Inter_18pt-Regular.ttf";
-
-async function listFonts(): Promise<FontGoogle[]> {
-  if (!API_KEY) return FALLBACK_FONTS;
-  try {
-    const r = await fetch(`https://www.googleapis.com/webfonts/v1/webfonts?sort=popularity&key=${API_KEY}`);
-    if (!r.ok) throw 0;
-    const data = await r.json();
-    if (!Array.isArray(data.items)) throw 0;
-    return data.items.map((it: any) => [it.family, it.files.regular]);
-  } catch {
-    return FALLBACK_FONTS;
-  }
-}
 
 // ==== Util ====
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -107,6 +48,15 @@ export default function TextToSVG() {
   const [tool, setTool] = useState<Tool>("text");
   const [penColor, setPenColor] = useState<string>("#111");
   const [penSize, setPenSize] = useState<number>(20);
+  const [shapeKind, setShapeKind] = useState<ShapeKind>("rect");
+  const [shapeFill, setShapeFill] = useState<string>("#09f");
+  const [shapeHasFill, setShapeHasFill] = useState<boolean>(true);
+  const [shapeStroke, setShapeStroke] = useState<string>("#111111");
+  const [shapeStrokeWidth, setShapeStrokeWidth] = useState<number>(2);
+  const [shapeRadius, setShapeRadius] = useState<number>(12); // rect redondeado
+  const creatingShapeRef = useRef<ShapeStroke | null>(null);
+
+
 
   // Documento
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -141,7 +91,7 @@ export default function TextToSVG() {
   }>(null);
 
   // ==== Cargar lista de fuentes ====
-  useEffect(() => { (async () => setFonts(await listFonts()))(); }, []);
+  useEffect(() => { (async () => setFonts(await listFonts(API_KEY, FALLBACK_FONTS)))(); }, []);
 
   // Precarga una fuente fallback local
   useEffect(() => {
@@ -176,69 +126,84 @@ export default function TextToSVG() {
   }, []);
 
 
-const menus: Menu[] = [
-  {
-    id: "archivo",
-    label: "Archivo",
-    items: [
-      { id: "nuevo", label: "Nuevo", shortcut: "⌘N", onSelect: clearCanvas },
-      { id: "descargar-como", label: "Descargar SVG", shortcut: "⇧⌘S", onSelect: exportSVG },
-    ],
-  },
-  {
-    id: "edicion",
-    label: "Edición",
-    items: [
-      { id: "deshacer", label: "Deshacer", shortcut: "⌘Z", onSelect: undo },
-      { separator: true, id: "sep2" },
-      { id: "cortar", label: "Cortar", shortcut: "⌘X" },
-      { id: "copiar", label: "Copiar", shortcut: "⌘C" },
-      { id: "pegar", label: "Pegar", shortcut: "⌘V" },
-      { separator: true, id: "sep3" },
-      { id: "seleccionar-todo", label: "Seleccionar todo", shortcut: "⌘A" },
-    ],
-  },
-  {
-    id: "imagen",
-    label: "Imagen",
-    items: [
-      { id: "importar-imagen", label: "Importar Imagen...", shortcut: "", onSelect: () => {
-        document.getElementById("uploadImageInputFile")?.click();
-      }},
-    ],
-  },
-];
-
-
-  // ==== Helper: asegurar fuente ====
-  function ensureFont(family: string) {
-    const cached = fontCacheRef.current.get(family);
-    if (cached) return cached;
-    if (pendingLoadsRef.current.has(family)) return null;
-
-    const entry = fonts.find(([name]) => name === family);
-    const url = entry?.[1];
-    if (!url) return null;
-
-    pendingLoadsRef.current.add(family);
-    setStatus(`Cargando fuente: ${family}`);
-    opentype.load(url).then((f) => {
-      fontCacheRef.current.set(family, f);
-      pendingLoadsRef.current.delete(family);
-      setStatus(`Fuente lista: ${family}`);
-      drawPreview(); // repinta cuando llegue
-    }).catch((err) => {
-      pendingLoadsRef.current.delete(family);
-      setStatus(`Error al cargar ${family}: ${err?.message || err}`);
-    });
-    return null;
-  }
+  const menus: Menu[] = [
+    {
+      id: "archivo",
+      label: "Archivo",
+      items: [
+        { id: "nuevo", label: "Nuevo", shortcut: "⌘N", onSelect: clearCanvas },
+        { id: "descargar-como", label: "Descargar SVG", shortcut: "⇧⌘S", onSelect: exportSVG },
+      ],
+    },
+    {
+      id: "edicion",
+      label: "Edición",
+      items: [
+        { id: "deshacer", label: "Deshacer", shortcut: "⌘Z", onSelect: undo },
+        { separator: true, id: "sep2" },
+        { id: "cortar", label: "Cortar", shortcut: "⌘X" },
+        { id: "copiar", label: "Copiar", shortcut: "⌘C" },
+        { id: "pegar", label: "Pegar", shortcut: "⌘V" },
+        { separator: true, id: "sep3" },
+        { id: "seleccionar-todo", label: "Seleccionar todo", shortcut: "⌘A" },
+      ],
+    },
+    {
+      id: "imagen",
+      label: "Imagen",
+      items: [
+        { id: "importar-imagen", label: "Importar Imagen...", shortcut: "", onSelect: handleUploadImage },
+      ],
+    },
+  ];
 
   // ==== Cambio de fuente “actual” (para nuevos textos) ====
-  function handleFontChange(family: string) {
-    setFontFamily(family);
-    ensureFont(family);
+  async function handleFontChange(family: string, opts?: { applyToSelection?: boolean }) {
+    setFontFamily(family); // fuente “por defecto” para textos nuevos
+
+    const newFont = await ensureFontAsync(family, fonts, fontCacheRef.current, pendingLoadsRef.current);
+    if (!newFont) {
+      setStatus(`No pude cargar: ${family}`);
+      return;
+    }
+
+    // ¿Hay textos seleccionados?
+    const selectedTextIds = selectedIds.filter(id => {
+      const s = strokes.find(st => st.id === id);
+      return s && s.type === "text" && !s.locked;
+    });
+
+    const shouldApply = opts?.applyToSelection ?? (selectedTextIds.length > 0);
+
+    if (shouldApply && selectedTextIds.length) {
+      setStrokes(prev => prev.map(s => {
+        if (s.type !== "text" || !selectedTextIds.includes(s.id)) return s;
+
+        const ts = s as TextStroke;
+        // fuente anterior (si no está en cache, no compensamos posición)
+        const oldFont = fontCacheRef.current.get(ts.fontFamily);
+        if (!oldFont) return { ...ts, fontFamily: family };
+
+        // Mantener la esquina superior-izquierda: compensar x/y por diferencia de bbox
+        const b0 = boundsWithFont(ts, oldFont);
+        const tsNew: TextStroke = { ...ts, fontFamily: family };
+        const b1 = boundsWithFont(tsNew, newFont);
+
+        if (b0 && b1) {
+          const dx = b0.x - b1.x;
+          const dy = b0.y - b1.y;
+          return { ...tsNew, x: tsNew.x + dx, y: tsNew.y + dy };
+        }
+        return tsNew;
+      }));
+      setStatus(`Fuente aplicada a selección: ${family}`);
+    } else {
+      setStatus(`Fuente activa: ${family}`);
+    }
+
+    drawPreview();
   }
+
 
   // ==== Redibujo ====
   useEffect(() => { drawPreview(); }, [strokes, fill, bg, tool, transparentBG, lineHeight]);
@@ -283,17 +248,11 @@ const menus: Menu[] = [
     // Un único recorrido por capas:
     offctx.save();
     for (const s of sorted) {
-      if (s.type === "eraser") {
-        offctx.globalCompositeOperation = "destination-out";
-        drawEraser(offctx, s);
-        offctx.globalCompositeOperation = "source-over";
-      } else if (s.type === "pen") {
-        drawPen(offctx, s);
-      } else if (s.type === "text") {
-        drawText(offctx, s);
-      } else if (s.type === "svg") {
-        drawSVG(offctx, s);
-      }
+      if (s.type === "eraser") { offctx.globalCompositeOperation="destination-out"; drawEraser(offctx, s); offctx.globalCompositeOperation="source-over"; }
+      else if (s.type === "pen") drawPen(offctx, s);
+      else if (s.type === "shape") drawShape(offctx, s as ShapeStroke);   // <---
+      else if (s.type === "svg") drawSVG(offctx, s as SvgStroke);
+      else if (s.type === "text") drawText(offctx, s as TextStroke);
     }
     offctx.restore();
 
@@ -354,8 +313,50 @@ const menus: Menu[] = [
     ctx.stroke();
     ctx.restore();
   }
+  function drawShape(ctx: CanvasRenderingContext2D, s: ShapeStroke) {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = s.strokeWidth;
+    ctx.strokeStyle = s.stroke;
+    const doFill = s.fill !== "none";
+    if (doFill) ctx.fillStyle = s.fill;
+
+    if (s.kind === "rect") {
+      const x = s.w >= 0 ? s.x : s.x + s.w;
+      const y = s.h >= 0 ? s.y : s.y + s.h;
+      const w = Math.abs(s.w), h = Math.abs(s.h);
+      const r = Math.max(0, Math.min(s.rx ?? 0, Math.min(w, h)/2));
+      ctx.beginPath();
+      if ((ctx as any).roundRect) {
+        (ctx as any).roundRect(x, y, w, h, r);
+      } else {
+        // fallback simple sin esquinas redondas
+        ctx.rect(x, y, w, h);
+      }
+      if (doFill) ctx.fill();
+      if (s.strokeWidth > 0) ctx.stroke();
+    } else if (s.kind === "ellipse") {
+      const cx = s.x + s.w / 2;
+      const cy = s.y + s.h / 2;
+      const rx = Math.abs(s.w / 2);
+      const ry = Math.abs(s.h / 2);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      if (doFill) ctx.fill();
+      if (s.strokeWidth > 0) ctx.stroke();
+    } else if (s.kind === "line") {
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x + s.w, s.y + s.h);
+      // llenar línea no aplica; solo stroke
+      if (s.strokeWidth > 0) ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawText(ctx: CanvasRenderingContext2D, s: TextStroke) {
-    const f = ensureFont(s.fontFamily);
+    const f = ensureFont(s.fontFamily, fonts, fontCacheRef.current, pendingLoadsRef.current, setStatus, drawPreview);
     if (!f) return; // aún cargando
 
     const lines = (s.text || "").split("\n").map(l => l.length ? l : " ");
@@ -373,15 +374,6 @@ const menus: Menu[] = [
     }
     ctx.restore();
   }
-  function alignShiftX(f: Font, line: string, size: number, align: TextStroke["align"]) {
-    if (align === "left") return 0;
-    const p = f.getPath(line, 0, 0, size);
-    const b = p.getBoundingBox();
-    const w = (b.x2 - b.x1) || 0;
-    if (align === "center") return -w / 2;
-    if (align === "right") return -w;
-    return 0;
-  }
 
   // ==== Bounds aproximados ====
   function getStrokeBounds(s: Stroke): { x: number; y: number; w: number; h: number } | null {
@@ -396,6 +388,17 @@ const menus: Menu[] = [
       }
       const h = s.size / 2;
       return { x: minX - h, y: minY - h, w: (maxX - minX) + 2*h, h: (maxY - minY) + 2*h };
+    } else if (s.type === "shape") {
+      if (s.kind === "line") {
+        const x1 = s.x, y1 = s.y, x2 = s.x + s.w, y2 = s.y + s.h;
+        const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+        const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+        const h = s.strokeWidth / 2;
+        return { x: minX - h, y: minY - h, w: (maxX - minX) + 2*h, h: (maxY - minY) + 2*h };
+      }
+      const x = s.w >= 0 ? s.x : s.x + s.w;
+      const y = s.h >= 0 ? s.y : s.y + s.h;
+      return { x, y, w: Math.abs(s.w), h: Math.abs(s.h) };
     } else if (s.type === "svg") {
       const w = s.iw * s.scale;
       const h = s.ih * s.scale;
@@ -422,14 +425,6 @@ const menus: Menu[] = [
     }
   }
 
-  // ==== Pointer utils ====
-  function getCanvasPos(canvas: HTMLCanvasElement, e: React.PointerEvent) {
-    const r = canvas.getBoundingClientRect();
-    const sx = canvas.width / r.width;
-    const sy = canvas.height / r.height;
-    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
-  }
-
   function hitTest(pt: Pt): string | null {
     // topmost primero
     const sorted = [...strokes].sort((a,b)=>b.z-a.z);
@@ -447,6 +442,37 @@ const menus: Menu[] = [
           const path2d = new Path2D(p.toPathData(2));
           if (ctx.isPointInPath(path2d, pt.x, pt.y)) return s.id;
           y += s.size * s.lineHeight;
+        }
+      } else if (s.type === "shape") {
+        const c = document.createElement("canvas");
+        const ctx = c.getContext("2d")!;
+        const path = new Path2D();
+
+        if (s.kind === "rect") {
+          const x = s.w >= 0 ? s.x : s.x + s.w;
+          const y = s.h >= 0 ? s.y : s.y + s.h;
+          const w = Math.abs(s.w), h = Math.abs(s.h);
+          path.rect(x, y, w, h);
+          // hit en relleno o stroke
+          if (s.fill !== "none" && ctx.isPointInPath(path, pt.x, pt.y)) return s.id;
+          ctx.lineWidth = (s.strokeWidth || 0) + 4;
+          if (ctx.isPointInStroke(path, pt.x, pt.y)) return s.id;
+        } else if (s.kind === "ellipse") {
+          const cx = s.x + s.w/2, cy = s.y + s.h/2;
+          const rx = Math.abs(s.w/2), ry = Math.abs(s.h/2);
+          // normaliza punto a coords unitarias y comprueba dentro de elipse
+          const dx = (pt.x - cx) / rx, dy = (pt.y - cy) / ry;
+          const inside = (dx*dx + dy*dy) <= 1;
+          if (s.fill !== "none" && inside) return s.id;
+          // stroke approx: margen por ancho
+          const m = (s.strokeWidth || 0) / Math.max(rx, ry);
+          const insideOuter = ((pt.x - cx)/(rx + m))**2 + ((pt.y - cy)/(ry + m))**2 <= 1;
+          const insideInner = ((pt.x - cx)/(Math.max(1, rx - m)))**2 + ((pt.y - cy)/(Math.max(1, ry - m)))**2 <= 1;
+          if (insideOuter && !insideInner) return s.id;
+        } else if (s.kind === "line") {
+          const d = new Path2D(`M ${s.x} ${s.y} L ${s.x + s.w} ${s.y + s.h}`);
+          ctx.lineWidth = (s.strokeWidth || 1) + 4;
+          if (ctx.isPointInStroke(d, pt.x, pt.y)) return s.id;
         }
       } else if (s.type === "svg") {
         const w = s.iw * s.scale;
@@ -470,6 +496,28 @@ const menus: Menu[] = [
     canvas.setPointerCapture?.(e.pointerId);
     const p = getCanvasPos(canvas, e);
     const nextZ = getMaxZ(strokes) + 1;
+
+    if (tool === "shape") {
+      const s: ShapeStroke = {
+        id: uid(),
+        type: "shape",
+        z: getMaxZ(strokes) + 1,
+        visible: true,
+        locked: false,
+        kind: shapeKind,
+        x: p.x, y: p.y,
+        w: 0, h: 0,
+        fill: shapeHasFill ? shapeFill : "none",
+        stroke: shapeStroke,
+        strokeWidth: shapeStrokeWidth,
+        rx: shapeKind === "rect" ? shapeRadius : undefined,
+      };
+      creatingShapeRef.current = s;
+      setStrokes(prev => [...prev, s]);
+      setSelectedIds([s.id]);
+      drawPreview();
+      return;
+    }
 
     if (tool === "pen" || tool === "eraser") {
       let z = nextZ;
@@ -511,7 +559,7 @@ const menus: Menu[] = [
         rotation: 0,
         align: "left",
       };
-      ensureFont(fontFamily);
+      ensureFont(fontFamily, fonts, fontCacheRef.current, pendingLoadsRef.current, setStatus, drawPreview);
       setStrokes(prev => [...prev, textStroke]);
       setSelectedIds([textStroke.id]);
       drawPreview();
@@ -562,13 +610,15 @@ const menus: Menu[] = [
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = e.currentTarget;
 
+    // =========================
     // RESIZE activo
+    // =========================
     if (resizingRef.current) {
       const r = resizingRef.current;
       const p = getCanvasPos(e.currentTarget, e);
       const { startBBox: b, startStroke: s0, handle } = r;
 
-      // ancla = esquina opuesta al handle
+      // ancla = esquina opuesta al handle (para todos los tipos que usan bbox)
       let ax: number, ay: number;
       if (handle === "nw") { ax = b.x + b.w; ay = b.y + b.h; }
       else if (handle === "ne") { ax = b.x; ay = b.y + b.h; }
@@ -578,15 +628,15 @@ const menus: Menu[] = [
       // tamaño nuevo uniformemente (mantén proporción)
       const newW = Math.max(2, Math.abs(p.x - ax));
       const newH = Math.max(2, Math.abs(p.y - ay));
-      const f = Math.max(0.01, Math.min(newW / b.w, newH / b.h)); // factor
+      const f = Math.max(0.01, Math.min(newW / Math.max(1,b.w), newH / Math.max(1,b.h))); // factor
 
       setStrokes(prev => prev.map(st => {
         if (st.id !== r.id) return st;
 
-        // SVG: escalar y reposicionar para que la esquina ancla quede fija
+        // ---------------- SVG ----------------
         if (st.type === "svg") {
           const sv0 = s0 as SvgStroke;
-          const sv: SvgStroke = { ...st as SvgStroke, scale: Math.max(0.01, sv0.scale * f) };
+          const sv: SvgStroke = { ...(st as SvgStroke), scale: Math.max(0.01, sv0.scale * f) };
           const w2 = b.w * f, h2 = b.h * f;
           let nx: number, ny: number;
           if (handle === "nw") { nx = ax - w2; ny = ay - h2; }
@@ -597,7 +647,7 @@ const menus: Menu[] = [
           return sv;
         }
 
-        // TEXT: cambia size y corrige x/y para que el bbox final sea el esperado
+        // ---------------- TEXT ----------------
         if (st.type === "text") {
           const ts0 = s0 as TextStroke;
           let cand: TextStroke = { ...(st as TextStroke), size: Math.max(1, ts0.size * f) };
@@ -619,7 +669,46 @@ const menus: Menu[] = [
           return cand;
         }
 
-        // otros tipos: sin cambios
+        // ---------------- SHAPE (rect / ellipse / line) ----------------
+        if (st.type === "shape") {
+          const sh0 = s0 as ShapeStroke;
+
+          // ancla opuesta a la esquina que estás arrastrando
+          let ax:number, ay:number;
+          if (handle === "nw") { ax = b.x + b.w; ay = b.y + b.h; }
+          else if (handle === "ne") { ax = b.x; ay = b.y + b.h; }
+          else if (handle === "sw") { ax = b.x + b.w; ay = b.y; }
+          else { ax = b.x; ay = b.y; } // 'se'
+
+          // tamaños “libres”
+          let newW = Math.max(2, Math.abs(p.x - ax));
+          let newH = Math.max(2, Math.abs(p.y - ay));
+
+          // Si SHIFT y tipo rect/ellipse => cuadrar manteniendo proporción 1:1
+          if ((sh0.kind === "rect" || sh0.kind === "ellipse") && e.shiftKey) {
+            const m = Math.min(newW, newH);
+            newW = m;
+            newH = m;
+          }
+
+          // coloca la caja con la esquina ancla fija
+          let nx:number, ny:number;
+          if (handle === "nw") { nx = ax - newW; ny = ay - newH; }
+          else if (handle === "ne") { nx = ax; ny = ay - newH; }
+          else if (handle === "sw") { nx = ax - newW; ny = ay; }
+          else { nx = ax; ny = ay; }
+
+          // conserva el signo original de w/h (dirección)
+          return {
+            ...(st as ShapeStroke),
+            x: nx,
+            y: ny,
+            w: newW * ((st as ShapeStroke).w < 0 ? -1 : 1),
+            h: newH * ((st as ShapeStroke).h < 0 ? -1 : 1),
+          };
+        }
+
+        // otros tipos sin resize
         return st;
       }));
 
@@ -627,22 +716,54 @@ const menus: Menu[] = [
       return;
     }
 
+    // =========================
+    // Redimensionando al crear la forma (drag inicial)
+    // =========================
+    if (creatingShapeRef.current) {
+      const p = getCanvasPos(canvas, e);
+      setStrokes(prev => prev.map(st => {
+        if (st.id !== creatingShapeRef.current!.id) return st;
+        const s = st as ShapeStroke;
 
+        // delta “libre”
+        let w = p.x - s.x;
+        let h = p.y - s.y;
+
+        // Si es rect/ellipse y SHIFT está presionado => cuadrar
+        if ((s.kind === "rect" || s.kind === "ellipse") && e.shiftKey) {
+          const m = Math.min(Math.abs(w), Math.abs(h)) || 0;
+          const sx = w >= 0 ? 1 : -1;
+          const sy = h >= 0 ? 1 : -1;
+          w = m * sx;
+          h = m * sy;
+        }
+
+        return { ...s, w, h };
+      }));
+      drawPreview();
+      return;
+    }
+
+    // =========================
     // DIBUJO ACTIVO (lápiz/goma): añadir puntos
+    // =========================
     if (drawingRef.current) {
       const p = getCanvasPos(canvas, e);
       const s = drawingRef.current;
       const last = s.points[s.points.length - 1];
       if (!last || last.x !== p.x || last.y !== p.y) {
-        s.points.push(p);        // muta el trazo en curso (ya está en strokes[])
-        drawPreview();           // repinta sin esperar a setState
+        s.points.push(p);        // ya está en strokes[], mutamos y repintamos
+        drawPreview();
       }
       return;
     }
 
+    // =========================
     // ARRASTRE (selección)
+    // =========================
     const d = draggingRef.current;
     if (!d) return;
+
     const p = getCanvasPos(canvas, e);
     const dx = p.x - d.last.x;
     const dy = p.y - d.last.y;
@@ -650,19 +771,34 @@ const menus: Menu[] = [
 
     setStrokes(prev => prev.map(s => {
       if (s.id !== d.id || s.locked) return s;
-      if (s.type === "text" || s.type === "svg") {
+
+      // objetos con x/y: text, svg, shape
+      if (s.type === "text" || s.type === "svg" || s.type === "shape") {
         return { ...s, x: s.x + dx, y: s.y + dy };
-      } else {
-        const pts = s.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
-        return { ...s, points: pts } as Stroke;
       }
+
+      // polilíneas: pen / eraser
+      if (s.type === "pen" || s.type === "eraser") {
+        const pts = s.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+        return { ...s, points: pts };
+      }
+
+      return s;
     }));
+
     draggingRef.current = { ...d, last: p };
   }
+
 
   function onPointerUp() {
     if (resizingRef.current) {
       resizingRef.current = null;
+      drawPreview();
+      return;
+    }
+
+    if (creatingShapeRef.current) {
+      creatingShapeRef.current = null;
       drawPreview();
       return;
     }
@@ -693,7 +829,7 @@ const menus: Menu[] = [
     const scaleY = canvas.clientHeight / canvas.height;
 
     // ancho sugerido por línea más larga
-    const f = ensureFont(s.fontFamily);
+    const f = ensureFont(s.fontFamily, fonts, fontCacheRef.current, pendingLoadsRef.current, setStatus, drawPreview);
     const w = (() => {
       if (!f) return 240;
       const lines = s.text.split("\n");
@@ -801,29 +937,6 @@ const menus: Menu[] = [
     });
   }
 
-  // parser muy simple de width/height/viewBox
-  function parseSVGMeta(svg: string): { width?: number; height?: number; vbX?: number; vbY?: number; vbW?: number; vbH?: number } {
-    const mView = svg.match(/viewBox\\s*=\\s*"([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)\\s+([\\d\\.\\-eE]+)"/i);
-    const mW = svg.match(/\\swidth\\s*=\\s*"([\\d\\.]+)(px)?"/i);
-    const mH = svg.match(/\\sheight\\s*=\\s*"([\\d\\.]+)(px)?"/i);
-    const out: any = {};
-    if (mView) {
-      out.vbX = +mView[1]; out.vbY = +mView[2]; out.vbW = +mView[3]; out.vbH = +mView[4];
-    }
-    if (mW) out.width = +mW[1];
-    if (mH) out.height = +mH[1];
-    return out;
-  }
-
-  const isFontFile = (f: File) =>
-    /\.(ttf|otf)$/i.test(f.name) ||
-    f.type.startsWith("font") ||
-    f.type === "application/x-font-ttf" ||
-    f.type === "application/x-font-otf";
-
-  const isSvgFile = (f: File) =>
-    /\.svg$/i.test(f.name) || f.type === "image/svg+xml";
-
   function getDropCanvasPos(e: React.DragEvent) {
     const canvas = canvasRef.current!;
     const r = canvas.getBoundingClientRect();
@@ -907,7 +1020,6 @@ const menus: Menu[] = [
     drawPreview();
   }
 
-
   function drawSVG(ctx: CanvasRenderingContext2D, s: SvgStroke) {
     // cache de Image por id (rasteriza solo para PREVIEW)
     let img = svgImgCacheRef.current.get(s.id);
@@ -931,7 +1043,6 @@ const menus: Menu[] = [
     }
     ctx.restore();
   }
-
 
   // ==== Exportar SVG con máscara (respeta goma) ====
   function exportSVG({ eraseBackgroundToo = false }: { eraseBackgroundToo?: boolean } = {}) {
@@ -976,6 +1087,25 @@ const menus: Menu[] = [
         const w = (s.iw ?? 100) * (s.scale ?? 1);
         const h = (s.ih ?? 100) * (s.scale ?? 1);
         pushBounds(s.x, s.y, s.x + w, s.y + h);
+      }
+      if (s.type === "shape") {
+        const sh = s as ShapeStroke;
+        if (sh.kind === "line") {
+          const x1 = sh.x,       y1 = sh.y;
+          const x2 = sh.x+sh.w,  y2 = sh.y+sh.h;
+          const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+          const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+          const h = (sh.strokeWidth || 0) / 2 + AA_MARGIN;
+          pushBounds(minX - h, minY - h, maxX + h, maxY + h);
+        } else {
+          // rect / ellipse usan bbox con posible w/h negativos
+          const x = sh.w >= 0 ? sh.x : sh.x + sh.w;
+          const y = sh.h >= 0 ? sh.y : sh.y + sh.h;
+          const w = Math.abs(sh.w);
+          const h = Math.abs(sh.h);
+          const pad = (sh.strokeWidth || 0) / 2 + AA_MARGIN;
+          pushBounds(x - pad, y - pad, x + w + pad, y + h + pad);
+        }
       }
     }
 
@@ -1033,6 +1163,33 @@ const menus: Menu[] = [
         continue;
       }
 
+      if (s.type === "shape") {
+        const sh = s as ShapeStroke;
+        // OJO: aquí NO restes xMin/yMin; ya lo hace el <g ${T}> padre
+        if (sh.kind === "rect") {
+          const x = sh.w >= 0 ? sh.x : sh.x + sh.w;
+          const y = sh.h >= 0 ? sh.y : sh.y + sh.h;
+          const w = Math.abs(sh.w), h = Math.abs(sh.h);
+          const rx = Math.max(0, Math.min(sh.rx ?? 0, Math.min(w, h)/2));
+          contentEls.push(
+            `<rect x="${x}" y="${y}" width="${w}" height="${h}"` +
+            (rx ? ` rx="${rx}" ry="${rx}"` : ``) +
+            ` fill="${sh.fill === "none" ? "none" : sh.fill}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}"/>`
+          );
+        } else if (sh.kind === "ellipse") {
+          const cx = sh.x + sh.w/2, cy = sh.y + sh.h/2;
+          const rx = Math.abs(sh.w/2), ry = Math.abs(sh.h/2);
+          contentEls.push(
+            `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${sh.fill === "none" ? "none" : sh.fill}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}"/>`
+          );
+        } else if (sh.kind === "line") {
+          contentEls.push(
+            `<line x1="${sh.x}" y1="${sh.y}" x2="${sh.x + sh.w}" y2="${sh.y + sh.h}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`
+          );
+        }
+        continue;
+      }
+
       if (s.type === "eraser") {
         if (s.points.length < 2) continue;
         let d = `M ${s.points[0].x} ${s.points[0].y}`;
@@ -1076,11 +1233,10 @@ const menus: Menu[] = [
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "editor-masked.svg";
+    a.download = "text-to.svg";
     a.click();
     URL.revokeObjectURL(url);
   }
-
 
   // ==== Upload TTF/OTF y añadirlo al cache como “Custom” ====
   function onUploadTTF(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1100,36 +1256,6 @@ const menus: Menu[] = [
         setStatus("No pude parsear el TTF/OTF: " + (err?.message || err));
       }
     });
-  }
-
-function sanitizeForEmbed(src: string) {
-  let s = src.replace(/^\uFEFF/, "");
-  s = s.replace(/<\?xml[\s\S]*?\?>/gi, "");     // prologs
-  s = s.replace(/<\?[\s\S]*?\?>/g, "");
-  s = s.replace(/<!DOCTYPE[\s\S]*?>/gi, "");
-  s = s.replace(/<!--[\s\S]*?-->/g, "");        // comentarios
-  s = s.replace(/<metadata[\s\S]*?<\/metadata>/gi, "");
-  s = s.replace(/<script[\s\S]*?<\/script>/gi, "");
-  s = s.replace(/\s+on[a-z-]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "");
-  return s.trim();
-}
-
-// Devuelve innerHTML del <svg> (sin la etiqueta <svg>)
-function extractSvgInner(svg: string) {
-  const s = sanitizeForEmbed(svg);
-  const m = s.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i);
-  return m ? m[1] : s; // si no hay <svg>, devuelve tal cual
-}
-
-
-
-  // z helpers
-  function getMaxZ(arr: Stroke[] = strokes) {
-    return arr.reduce((m, s) => Math.max(m, s.z), 0);
-  }
-  function normalizeZ(arr: Stroke[]) {
-    const sorted = [...arr].sort((a,b) => a.z - b.z);
-    return sorted.map((s, i) => ({ ...s, z: i + 1 }));
   }
 
   // Acciones de orden
@@ -1174,6 +1300,10 @@ function extractSvgInner(svg: string) {
       });
       return normalizeZ(arr);
     });
+  }
+
+  function handleUploadImage() {
+    document.getElementById("uploadImageInputFile")?.click();
   }
 
   function handleRects(b: {x:number;y:number;w:number;h:number}, dpr=1) {
@@ -1302,6 +1432,72 @@ function extractSvgInner(svg: string) {
               </div>
             )}
 
+            { (tool === "shape") && (
+              <>
+                <div className="w-14 sm:w-auto">
+                  <Label>Tipo</Label>
+                  <select
+                    className="w-full p-2 rounded-lg border border-neutral-300"
+                    value={shapeKind}
+                    onChange={e => setShapeKind(e.target.value as ShapeKind)}
+                  >
+                    <option value="rect">Rectángulo</option>
+                    <option value="ellipse">Elipse</option>
+                    <option value="line">Línea</option>
+                  </select>
+                </div>
+                {shapeKind === "rect" && (
+                  <div className="w-14">
+                    <Label>Radio</Label>
+                    <input
+                      type="number"
+                      min={0}
+                      className="w-full p-2 rounded-lg border border-neutral-300"
+                      value={shapeRadius}
+                      onChange={(e) => setShapeRadius(Math.max(0, +e.target.value || 0))}
+                    />
+                  </div>
+                )}
+                <div className="w-14 sm:w-auto">
+                  <Label>Relleno</Label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      disabled={!shapeHasFill || shapeKind === "line"}
+                      className="w-16 h-10 p-1 rounded-lg border border-neutral-300"
+                      value={shapeFill}
+                      onChange={(e)=>setShapeFill(e.target.value)}
+                    />
+                    <label className="text-sm flex items-center gap-1">
+                      <input type="checkbox" checked={shapeHasFill} onChange={(e)=>setShapeHasFill(e.target.checked)} />
+                      Con relleno
+                    </label>
+                  </div>
+                </div>
+
+                <div className="w-14 sm:w-auto">
+                  <Label>Borde</Label>
+                  <input
+                    type="color"
+                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
+                    value={shapeStroke}
+                    onChange={(e) => setShapeStroke(e.target.value)}
+                  />
+                </div>
+
+                <div className="w-14">
+                  <Label>Grosor</Label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-full p-2 rounded-lg border border-neutral-300"
+                    value={shapeStrokeWidth}
+                    onChange={(e) => setShapeStrokeWidth(Math.max(0, +e.target.value || 0))}
+                  />
+                </div>
+              </>
+            )}
+
             <div className="hidden md:flex items-center ml-auto gap-2">
               <Drawer.Root direction="right">
                 <Drawer.Trigger className="px-2 py-1 rounded border">
@@ -1362,7 +1558,7 @@ function extractSvgInner(svg: string) {
                                   )}
                                   {s.type === "svg" && (
                                     <>
-                                      <img src="/svg-icon.svg" className="inline size-4 mr-1" alt="SVG" />
+                                    <FileSVGIcon className="inline size-4 mr-1" />
                                       SVG
                                     </>
                                   )}
@@ -1437,10 +1633,26 @@ function extractSvgInner(svg: string) {
           </button>
           <button
             type="button"
+            className={`px-3 py-2 rounded-lg ${tool === "shape" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+            onClick={() => setTool("shape")}
+          >
+            {shapeKind === "rect" ? <SquareIcon className="size-4 md:size-8" />
+              : shapeKind === "ellipse" ? <CircleIcon className="size-4 md:size-8" />
+              : shapeKind === "line" ? <LineIcon className="size-4 md:size-8" /> : null}
+          </button>
+          <button
+            type="button"
             className={`px-3 py-2 rounded-lg ${tool === "text" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
             onClick={() => setTool("text")}
           >
             <TextIcon className="size-4 md:size-8" />
+          </button>
+          <button
+            type="button"
+            className="px-3 py-2 rounded-lg bg-neutral-200 text-neutral-800"
+            onClick={handleUploadImage}
+          >
+            <ImagePlusIcon className="size-4 md:size-8" />
           </button>
           <button
             type="button"
