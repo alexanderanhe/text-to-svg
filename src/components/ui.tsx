@@ -1,5 +1,5 @@
 export const Label: React.FC<{ htmlFor?: string; children: React.ReactNode }>=({ htmlFor, children })=> (
-  <label htmlFor={htmlFor} className="hidden sm:block text-left text-sm font-medium mb-1">{children}</label>
+  <label htmlFor={htmlFor} className="text-xs sm:text-sm w-full flex font-medium sm:mb-1">{children}</label>
 );
 
 export const SquareDashedIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (

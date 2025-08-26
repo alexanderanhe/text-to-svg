@@ -11,6 +11,10 @@ import { isFontFile, isSvgFile } from "../../utils/fileUtils";
 import { extractSvgInner, parseSVGMeta } from "../../utils/svgUtils";
 import { getCanvasPos } from "../../utils/canvasUtils";
 import { alignShiftX, boundsWithFont, getMaxZ, normalizeZ } from "../../utils/helpers";
+import { FillPicker } from "../FillPicker";
+import { StrokeWidth } from "../StrokeWidth";
+import { Radius } from "../Radius";
+import { IconButton } from "../IconButton";
 
 const AA_MARGIN = 1; // 1px de seguridad contra antialias/decimales
 
@@ -1341,12 +1345,12 @@ export default function TextToSVG() {
               />
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 mb-2">
+          <div className="flex flex-wrap items-center gap-1 mb-2">
 
             { tool === "text" && (
               <>
                 <div className="w-full max-w-32 sm:max-w-xs">
-                  <Label>Fuente (Google Fonts)</Label>
+                  <Label>Fuente</Label>
                   <KCmdKModal
                     title="Fuente (Google Fonts)"
                     label={fontFamily || "Fuente"}
@@ -1356,7 +1360,7 @@ export default function TextToSVG() {
                   />
                 </div>
 
-                <div className="w-14 sm:w-auto">
+                <div className="w-auto">
                   <Label>Nueva</Label>
                   <div className="flex items-center gap-2 h-11">
                     <label className="px-2 py-1 border rounded cursor-pointer">
@@ -1366,7 +1370,7 @@ export default function TextToSVG() {
                   </div>
                 </div>
                 <div className="w-14 sm:w-auto">
-                  <Label>Line height</Label>
+                  <Label>Height</Label>
                   <input
                     type="number"
                     step="0.05"
@@ -1379,13 +1383,15 @@ export default function TextToSVG() {
                 </div>
 
                 <div className="w-14 sm:w-auto">
-                  <Label>Color de texto</Label>
-                  <input
-                    type="color"
-                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
-                    value={fill}
-                    onChange={(e) => setFill(e.target.value)}
-                  />
+                  <Label>Color</Label>
+                  <div className="relative flex items-center gap-2">
+                    <FillPicker
+                      label="Color de texto"
+                      value={fill}
+                      onChange={setFill}
+                    />
+                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
+                  </div>
                 </div>
               </>
             )}
@@ -1393,13 +1399,16 @@ export default function TextToSVG() {
             { (tool === "pen" || tool === "eraser") && (
               <>
                 <div className="w-14 sm:w-auto">
-                  <Label>Pencil Color</Label>
-                  <input
-                    type="color"
-                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
-                    value={penColor}
-                    onChange={(e) => setPenColor(e.target.value)}
-                  />
+                  <Label>Color</Label>
+                  <div className="relative flex items-center gap-2">
+                    <FillPicker
+                      label="Pencil Color"
+                      value={penColor}
+                      onChange={setPenColor}
+                      placement="bottom-right"
+                    />
+                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
+                  </div>
                 </div>
 
                 <div>
@@ -1413,28 +1422,54 @@ export default function TextToSVG() {
               <div>
                 <Label>Herramientas de selección</Label>
                 <div className="flex items-center gap-2 h-11">
-                  <button onClick={() => bringToFront(selectedIds)} className="px-2 py-1 border rounded">
-                    <LayerUpIcon className="inline size-6" />
-                  </button>
-                  <button onClick={() => sendToBack(selectedIds)} className="px-2 py-1 border rounded">
-                    <LayerDownIcon className="inline size-6" />
-                  </button>
-                  <button onClick={() => bringForward(selectedIds)} className="px-2 py-1 border rounded">
-                    <SortAmountUpIcon className="inline size-6" />
-                  </button>
-                  <button onClick={() => sendBackward(selectedIds)} className="px-2 py-1 border rounded">
-                    <SortAmountDownIcon className="inline size-6" />
-                  </button>
-                  <button onClick={deleteSelected} className="px-2 py-1 rounded border">
-                    <TrashIcon className="inline size-6" />
-                  </button>
+                  <IconButton
+                    title="Traer al frente"
+                    ariaLabel="Traer al frente"
+                    onClick={() => bringToFront(selectedIds)}
+                  >
+                    <LayerUpIcon className="size-6" />
+                  </IconButton>
+
+                  <IconButton
+                    title="Enviar al fondo"
+                    ariaLabel="Enviar al fondo"
+                    onClick={() => sendToBack(selectedIds)}
+                  >
+                    <LayerDownIcon className="size-6" />
+                  </IconButton>
+
+                  <IconButton
+                    title="Subir una capa"
+                    ariaLabel="Subir una capa"
+                    onClick={() => bringForward(selectedIds)}
+                  >
+                    <SortAmountUpIcon className="size-6" />
+                  </IconButton>
+
+                  <IconButton
+                    title="Bajar una capa"
+                    ariaLabel="Bajar una capa"
+                    onClick={() => sendBackward(selectedIds)}
+                  >
+                    <SortAmountDownIcon className="size-6" />
+                  </IconButton>
+
+                  <IconButton
+                    title="Eliminar"
+                    ariaLabel="Eliminar"
+                    variant="danger"
+                    onClick={deleteSelected}
+                  >
+                    <TrashIcon className="size-6" />
+                  </IconButton>
                 </div>
               </div>
+
             )}
 
             { (tool === "shape") && (
               <>
-                <div className="w-14 sm:w-auto">
+                <div className="w-28 sm:w-auto">
                   <Label>Tipo</Label>
                   <select
                     className="w-full p-2 rounded-lg border border-neutral-300"
@@ -1449,173 +1484,195 @@ export default function TextToSVG() {
                 {shapeKind === "rect" && (
                   <div className="w-14">
                     <Label>Radio</Label>
-                    <input
-                      type="number"
-                      min={0}
-                      className="w-full p-2 rounded-lg border border-neutral-300"
+                    <Radius
                       value={shapeRadius}
-                      onChange={(e) => setShapeRadius(Math.max(0, +e.target.value || 0))}
+                      onChange={setShapeRadius}
+                      min={0}
+                      max={128}        // ajusta si quieres otro rango
+                      step={1}
+                      placement="bottom"  // "top" | "left" | "right"
+                      disabled={shapeKind !== "rect"}  // solo aplica a rectángulos
                     />
                   </div>
                 )}
+                {shapeKind !== "line" && (
+                  <div>
+                    <Label>Relleno</Label>
+                    <div className="relative flex items-center gap-2">
+                      <FillPicker
+                        label="Relleno"
+                        value={shapeFill}
+                        onChange={setShapeFill}
+                        hasFill={shapeHasFill}
+                        onHasFillChange={setShapeHasFill}
+                        placement="bottom"
+                      />
+                      <span className="hidden sm:block text-xs text-neutral-500">{shapeHasFill ? shapeFill : "Sin relleno"}</span>
+                    </div>
+                  </div>
+                )}
+
                 <div className="w-14 sm:w-auto">
-                  <Label>Relleno</Label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      disabled={!shapeHasFill || shapeKind === "line"}
-                      className="w-16 h-10 p-1 rounded-lg border border-neutral-300"
-                      value={shapeFill}
-                      onChange={(e)=>setShapeFill(e.target.value)}
+                  <Label>Borde</Label>
+                  <div className="relative flex items-center gap-2">
+                    <FillPicker
+                      label="Borde"
+                      value={shapeStroke}
+                      onChange={setShapeStroke}
                     />
-                    <label className="text-sm flex items-center gap-1">
-                      <input type="checkbox" checked={shapeHasFill} onChange={(e)=>setShapeHasFill(e.target.checked)} />
-                      Con relleno
-                    </label>
+                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
                   </div>
                 </div>
 
                 <div className="w-14 sm:w-auto">
-                  <Label>Borde</Label>
-                  <input
-                    type="color"
-                    className="w-full h-10 p-1 rounded-lg border border-neutral-300"
-                    value={shapeStroke}
-                    onChange={(e) => setShapeStroke(e.target.value)}
-                  />
-                </div>
-
-                <div className="w-14">
                   <Label>Grosor</Label>
-                  <input
-                    type="number"
-                    min={0}
-                    className="w-full p-2 rounded-lg border border-neutral-300"
-                    value={shapeStrokeWidth}
-                    onChange={(e) => setShapeStrokeWidth(Math.max(0, +e.target.value || 0))}
-                  />
+                  <div className="relative flex items-center gap-2">
+                    <StrokeWidth
+                      value={shapeStrokeWidth}
+                      onChange={setShapeStrokeWidth}
+                      min={0}
+                      max={64}
+                      step={1}
+                      placement="bottom"   // "top" | "left" | "right"
+                    />
+                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStrokeWidth}px</span>
+                  </div>
                 </div>
               </>
             )}
 
-            <div className="hidden md:flex items-center ml-auto gap-2">
-              <Drawer.Root direction="right">
-                <Drawer.Trigger className="px-2 py-1 rounded border">
-                  <LayerIcon className="inline size-6" />
-                </Drawer.Trigger>
-                <Drawer.Portal>
-                  <Drawer.Content
-                    className="right-2 top-2 bottom-2 fixed z-10 outline-none w-[310px] flex"
-                    style={{ '--initial-transform': 'calc(100% + 8px)' } as React.CSSProperties}
-                  >
-                    <div className="bg-zinc-50 h-full w-full grow p-5 flex flex-col rounded-[16px]">
-                      <div className="max-w-md mx-auto">
-                        <Drawer.Title className="font-medium mb-2 text-zinc-900">
-                          Capas y elementos del lienzo
-                        </Drawer.Title>
-                        <Drawer.Description className="text-zinc-600 mb-2">
-                          Aquí puedes ver y gestionar todos los elementos del lienzo.
-                        </Drawer.Description>
-                        <ul>
-                          {strokes.length === 0 && (
-                            <li className="text-sm text-zinc-500 italic">No hay elementos</li>
-                          )}
-                          {strokes.slice().sort((a,b)=>b.z - a.z).map(s => (
-                            <li key={s.id} className={`flex items-center justify-between mb-1 p-2 rounded hover:bg-zinc-100 ${selectedIds.includes(s.id) ? 'bg-zinc-200' : ''}`}>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedIds.includes(s.id)}
-                                  onChange={(e) => {
-                                    const checked = e.target.checked;
-                                    setSelectedIds(prev => {
-                                      if (checked) {
-                                        return [...prev, s.id];
-                                      } else {
-                                        return prev.filter(id => id !== s.id);
-                                      }
-                                    });
-                                  }}
-                                />
-                                <span className="text-sm">
-                                  {s.type === "text" && (
-                                    <>
-                                      <TextIcon className="inline size-4 mr-1" />
-                                      {s.text.split("\n")[0].slice(0,20) || "<vacio>"}
-                                    </>
-                                  )}
-                                  {s.type === "pen" && (
-                                    <>
-                                      <PaintBrushIcon className="inline size-4 mr-1" />
-                                      Dibujo
-                                    </>
-                                  )}
-                                  {s.type === "eraser" && (
-                                    <>
-                                      <ErraserIcon className="inline size-4 mr-1" />
-                                      Goma
-                                    </>
-                                  )}
-                                  {s.type === "svg" && (
-                                    <>
-                                    <FileSVGIcon className="inline size-4 mr-1" />
-                                      SVG
-                                    </>
-                                  )}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => {
-                                    setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, visible: !(st.visible ?? true) } : st));
-                                  }}
-                                  title={s.visible === false ? "Mostrar" : "Ocultar"}
-                                >
-                                  {s.visible === false
-                                    ? <EyeClosedIcon className="inline size-5 text-zinc-400" />
-                                    : <EyeOpenIcon className="inline size-5 text-zinc-700" />
-                                  }
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, locked: !(st.locked ?? false) } : st));
-                                  }}
-                                  title={s.locked ? "Desbloquear" : "Bloquear"}
-                                >
-                                  {s.locked
-                                    ? <LockClosedIcon className="inline size-5 text-zinc-400" />
-                                    : <LockOpenIcon className="inline size-5 text-zinc-700" />
-                                  }
-                                </button>
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
+            <div className="hidden md:block ml-auto">
+              <Label>&nbsp;</Label>
+              <div className="flex items-center gap-2">
+                <Drawer.Root direction="right">
+                  <Drawer.Trigger>
+                    <IconButton
+                      title="Abrir capas"
+                      ariaLabel="Abrir capas"
+                    >
+                      <LayerIcon className="inline size-6" />
+                    </IconButton>
+                  </Drawer.Trigger>
+                  <Drawer.Portal>
+                    <Drawer.Content
+                      className="right-2 top-2 bottom-2 fixed z-10 outline-none w-[310px] flex"
+                      style={{ '--initial-transform': 'calc(100% + 8px)' } as React.CSSProperties}
+                    >
+                      <div className="bg-zinc-50 h-full w-full grow p-5 flex flex-col rounded-[16px]">
+                        <div className="max-w-md mx-auto">
+                          <Drawer.Title className="font-medium mb-2 text-zinc-900">
+                            Capas y elementos del lienzo
+                          </Drawer.Title>
+                          <Drawer.Description className="text-zinc-600 mb-2">
+                            Aquí puedes ver y gestionar todos los elementos del lienzo.
+                          </Drawer.Description>
+                          <ul>
+                            {strokes.length === 0 && (
+                              <li className="text-sm text-zinc-500 italic">No hay elementos</li>
+                            )}
+                            {strokes.slice().sort((a,b)=>b.z - a.z).map(s => (
+                              <li key={s.id} className={`flex items-center justify-between mb-1 p-2 rounded hover:bg-zinc-100 ${selectedIds.includes(s.id) ? 'bg-zinc-200' : ''}`}>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedIds.includes(s.id)}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setSelectedIds(prev => {
+                                        if (checked) {
+                                          return [...prev, s.id];
+                                        } else {
+                                          return prev.filter(id => id !== s.id);
+                                        }
+                                      });
+                                    }}
+                                  />
+                                  <span className="text-sm">
+                                    {s.type === "text" && (
+                                      <>
+                                        <TextIcon className="inline size-4 mr-1" />
+                                        {s.text.split("\n")[0].slice(0,20) || "<vacio>"}
+                                      </>
+                                    )}
+                                    {s.type === "pen" && (
+                                      <>
+                                        <PaintBrushIcon className="inline size-4 mr-1" />
+                                        Dibujo
+                                      </>
+                                    )}
+                                    {s.type === "eraser" && (
+                                      <>
+                                        <ErraserIcon className="inline size-4 mr-1" />
+                                        Goma
+                                      </>
+                                    )}
+                                    {s.type === "svg" && (
+                                      <>
+                                      <FileSVGIcon className="inline size-4 mr-1" />
+                                        SVG
+                                      </>
+                                    )}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => {
+                                      setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, visible: !(st.visible ?? true) } : st));
+                                    }}
+                                    title={s.visible === false ? "Mostrar" : "Ocultar"}
+                                  >
+                                    {s.visible === false
+                                      ? <EyeClosedIcon className="inline size-5 text-zinc-400" />
+                                      : <EyeOpenIcon className="inline size-5 text-zinc-700" />
+                                    }
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, locked: !(st.locked ?? false) } : st));
+                                    }}
+                                    title={s.locked ? "Desbloquear" : "Bloquear"}
+                                  >
+                                    {s.locked
+                                      ? <LockClosedIcon className="inline size-5 text-zinc-400" />
+                                      : <LockOpenIcon className="inline size-5 text-zinc-700" />
+                                    }
+                                  </button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       </div>
-                    </div>
-                  </Drawer.Content>
-                  <Drawer.Overlay className="fixed inset-0 bg-black/40" />
-                </Drawer.Portal>
-              </Drawer.Root>
+                    </Drawer.Content>
+                    <Drawer.Overlay className="fixed inset-0 bg-black/40" />
+                  </Drawer.Portal>
+                </Drawer.Root>
 
-              <button onClick={undo} className="px-2 py-1 rounded border">
-                <FlipBackwardsIcon className="inline size-6" />
-              </button>
-              <span className="w-px h-full bg-gray-400">&nbsp;</span>
-              <button
-                onClick={() => exportSVG({ eraseBackgroundToo: false })}
-                className="px-2 py-1 rounded bg-neutral-900 text-white hover:bg-neutral-800 disabled:opacity-50 flex items-center gap-1"
-              >
-                <span className="text-sm">SVG</span>
-                <DownloadIcon className="inline size-6" />
-              </button>
-              {/* <button
-                onClick={() => exportSVG({ eraseBackgroundToo: true })}
-                className="px-2 py-1 rounded bg-neutral-700 text-white hover:bg-neutral-600 disabled:opacity-50"
-                title="La goma también recorta el fondo"
-              >
-                SVG (borra fondo)
-              </button> */}
+                <IconButton
+                  title="Eliminar ultima capa"
+                  ariaLabel="Eliminar ultima capa"
+                  onClick={undo}
+                >
+                  <FlipBackwardsIcon className="inline size-6" />
+                </IconButton>
+                <span className="w-px h-full bg-gray-400">&nbsp;</span>
+                <IconButton
+                  title="Descargar SVG"
+                  ariaLabel="Descargar SVG"
+                  className="w-20"
+                  onClick={() => exportSVG({ eraseBackgroundToo: false })}
+                >
+                  <span className="text-sm">SVG</span>
+                  <DownloadIcon className="inline size-6" />
+                </IconButton>
+                {/* <button
+                  onClick={() => exportSVG({ eraseBackgroundToo: true })}
+                  className="px-2 py-1 rounded bg-neutral-700 text-white hover:bg-neutral-600 disabled:opacity-50"
+                  title="La goma también recorta el fondo"
+                >
+                  SVG (borra fondo)
+                </button> */}
+              </div>
             </div>
           </div>
         </div>
@@ -1668,20 +1725,15 @@ export default function TextToSVG() {
           >
             <ErraserIcon className="size-4 md:size-8" />
           </button>
-          <input
-            type="color"
-            className={`size-10 md:size-14 p-1 rounded-lg border border-neutral-300 bg-neutral-200 overflow-hidden ${transparentBG ? 'relative before:content-[\'\'] before:absolute before:left-2 before:bottom-2 before:w-8 md:before:w-13 before:h-0.5 before:bg-red-500 before:-rotate-43 before:origin-left' : ''}`}
-            disabled={transparentBG}
-            value={transparentBG ? '#ffffff' : bg}
-            onChange={(e)=>setBg(e.target.value)}
+          <FillPicker
+            label="Fondo"
+            value={bg}
+            onChange={setBg}
+            hasFill={!transparentBG}
+            onHasFillChange={(v) => setTransparentBG(!v)}
+            placement="right"
+            className="size-10 md:w-14 md:h-10"
           />
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={transparentBG}
-              onChange={(e)=>setTransparentBG(e.target.checked)}
-            />
-          </label>
         </div>
 
         <div>
