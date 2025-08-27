@@ -131,13 +131,14 @@ export default function KCmdKModal({
         e.preventDefault();
         move(active - Math.max(1, Math.floor((listRef.current?.clientHeight ?? 0) / 32)));
         break;
-      case "Enter":
+      case "Enter": {
         e.preventDefault();
         if (!items.length) return;
         const [f] = items[active];
         handleFontChange(f);
         setOpen(false); // cierra al seleccionar
         break;
+      }
     }
   };
   // -----------------------------------------

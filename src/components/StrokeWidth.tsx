@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useConstrainedPopover } from "../hook/useConstrainedPopover";
 
 type Placement = "bottom" | "top" | "left" | "right";
 
@@ -26,10 +27,12 @@ export function StrokeWidth({
   const [open, setOpen] = useState(false);
   const [local, setLocal] = useState(value);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => setLocal(value), [value]);
 
-  // cerrar con click fuera / Esc
+  // cerrar con click fuera / Esc y atajos ↑ ↓
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
@@ -46,17 +49,30 @@ export function StrokeWidth({
     return () => { document.removeEventListener("mousedown", onDoc); window.removeEventListener("keydown", onKey); };
   }, [open, value, min, max, step, onChange]);
 
-  const pos = {
-    bottom: "top-full mt-2 right-0",
-    top: "bottom-full mb-2 right-0",
-    left: "top-1/2 -translate-y-1/2 right-full mr-2",
-    right: "top-1/2 -translate-y-1/2 left-full ml-2",
+  // Mapea tu placement a preferred + align del hook
+  const map = {
+    bottom: { preferred: "bottom" as const, align: "end" as const }, // antes: right-0
+    top:    { preferred: "top"    as const, align: "end" as const }, // antes: right-0
+    left:   { preferred: "left"   as const, align: "center" as const },
+    right:  { preferred: "right"  as const, align: "center" as const },
   }[placement];
+
+  // Posicionamiento fijo clampeado al viewport
+  useConstrainedPopover({
+    open,
+    popoverRef: popRef as React.RefObject<HTMLElement>,
+    triggerRef: btnRef as React.RefObject<HTMLElement>,
+    preferred: map.preferred,
+    align: map.align,
+    gap: 8,
+    padding: 8,
+  });
 
   return (
     <div ref={wrapRef} className="relative inline-block">
       {/* Trigger compacto */}
       <button
+        ref={btnRef}
         type="button"
         className={`${className} h-10 rounded-lg border border-neutral-300 shadow-sm flex items-center justify-center p-0 hover:shadow focus:outline-none focus:ring-2 focus:ring-neutral-600`}
         onClick={() => setOpen(o => !o)}
@@ -70,9 +86,14 @@ export function StrokeWidth({
         </div>
       </button>
 
-      {/* Popover */}
+      {/* Popover (FIXED + clamp viewport) */}
       {open && (
-        <div role="dialog" className={`absolute z-50 w-64 rounded-xl border bg-white shadow-xl p-3 ${pos}`}>
+        <div
+          ref={popRef}
+          role="dialog"
+          className="fixed z-50 w-64 rounded-xl border bg-white shadow-xl p-3
+                     max-w-[calc(100vw-16px)] max-h-[calc(100dvh-16px)] overflow-auto overscroll-contain"
+        >
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <span className="text-xs text-neutral-600 w-14">Grosor</span>

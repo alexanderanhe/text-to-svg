@@ -1977,20 +1977,19 @@ export default function TextToSVG() {
           </div>
         </div>
       </div>
-      <div className="h-14 overflow-y-auto space-y-1">
-        <p className="text-xs text-neutral-500">{status}</p>
-        { tool === "text" && (
-          <>
-            <p className="text-xs text-neutral-500">click para crear, doble click para editar. Seleccionar: arrastra para mover. Delete para borrar.</p>
-            <p className="text-xs text-neutral-500">Puedes buscar una fuente, o subir un TTF/OTF personalizado.</p>
-          </>
-        )}
-        { tool === "select" && (
-          <>
-            <p className="text-xs text-neutral-500">Seleccionar: arrastra para mover. Delete para borrar.</p>
-          </>
-        )}
-        <p className="text-xs text-neutral-500">Tip: mantén <kbd>Shift</kbd> al iniciar un trazo para insertarlo debajo de lo seleccionado.</p>
+      <div className="overflow-y-auto space-y-1">
+        <p className="text-xs text-neutral-500 flex flex-col sm:flex-row pl-10 sm:pl-14">
+          <span>{status}</span>
+          { tool === "text" ? (
+            <span className="ml-auto">Tip: click para crear. Puedes buscar una fuente, o subir un TTF/OTF personalizado.</span>
+          ) : tool === "select" ? (
+            <>
+              <span className="ml-auto">Tip: Arrastra para mover. Delete para borrar.</span>
+            </>
+          ) : (
+            <span className="ml-auto">Tip: mantén <kbd>Shift</kbd> al iniciar un trazo para insertarlo debajo de lo seleccionado.</span>
+          )}
+        </p>
       </div>
     </div>
   );

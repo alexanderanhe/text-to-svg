@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useConstrainedPopover } from "../hook/useConstrainedPopover";
 
 type Placement = "bottom" | "top" | "left" | "right";
 
@@ -27,7 +28,10 @@ export function Radius({
 }: RadiusProps) {
   const [open, setOpen] = useState(false);
   const [local, setLocal] = useState(value);
+
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const btnRef  = useRef<HTMLButtonElement | null>(null);
+  const popRef  = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => setLocal(value), [value]);
 
@@ -40,7 +44,7 @@ export function Radius({
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
-      if (e.key === "ArrowUp") { e.preventDefault(); onChange(Math.min(max, (value ?? 0) + step)); }
+      if (e.key === "ArrowUp")   { e.preventDefault(); onChange(Math.min(max, (value ?? 0) + step)); }
       if (e.key === "ArrowDown") { e.preventDefault(); onChange(Math.max(min, (value ?? 0) - step)); }
     };
     document.addEventListener("mousedown", onDoc);
@@ -51,13 +55,24 @@ export function Radius({
     };
   }, [open, value, min, max, step, onChange]);
 
-  const pos = {
-    bottom: "top-full mt-2 left-0",
-    'bottom-left': "top-full mt-2 right-0",
-    top: "bottom-full mb-2 right-0",
-    left: "top-1/2 -translate-y-1/2 right-full mr-2",
-    right: "top-1/2 -translate-y-1/2 left-full ml-2",
+  // Mapea tu placement → preferred + align para el hook
+  const map = {
+    bottom: { preferred: "bottom" as const, align: "start"  as const }, // abajo-izq (left-0)
+    top:    { preferred: "top"    as const, align: "end"    as const }, // arriba-der (right-0)
+    left:   { preferred: "left"   as const, align: "center" as const },
+    right:  { preferred: "right"  as const, align: "center" as const },
   }[placement];
+
+  // Posicionamiento FIXED + clamp al viewport
+  useConstrainedPopover({
+    open,
+    popoverRef: popRef as React.RefObject<HTMLElement>,
+    triggerRef: btnRef as React.RefObject<HTMLElement>,
+    preferred: map.preferred,
+    align: map.align,
+    gap: 8,
+    padding: 8,
+  });
 
   // Preview interno del trigger (caja 22x14)
   const boxW = 22, boxH = 14;
@@ -68,6 +83,7 @@ export function Radius({
     <div ref={wrapRef} className="relative inline-block">
       {/* Trigger compacto */}
       <button
+        ref={btnRef}
         type="button"
         className={`${className} h-10 rounded-lg border border-neutral-300 shadow-sm flex items-center justify-center p-0 ${disabled ? "opacity-50 cursor-not-allowed" : "hover:shadow"} focus:outline-none focus:ring-2 focus:ring-neutral-600`}
         onClick={() => !disabled && setOpen(o => !o)}
@@ -84,9 +100,14 @@ export function Radius({
         </div>
       </button>
 
-      {/* Popover */}
+      {/* Popover (FIXED + clamp viewport) */}
       {open && !disabled && (
-        <div role="dialog" className={`absolute z-50 w-64 rounded-xl border bg-white shadow-xl p-3 ${pos}`}>
+        <div
+          ref={popRef}
+          role="dialog"
+          className="fixed z-50 w-64 rounded-xl border bg-white shadow-xl p-3
+                     max-w-[calc(100vw-16px)] max-h-[calc(100dvh-16px)] overflow-auto overscroll-contain"
+        >
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <span className="text-xs text-neutral-600 w-14">Radio</span>

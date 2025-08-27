@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useConstrainedPopover } from "../hook/useConstrainedPopover";
 
 // ————————————————————————————————————————————————————————————————
 // Types
@@ -261,69 +262,113 @@ export default function ClassicMenuBar({
               </button>
 
               {/* Dropdown */}
-              {isOpen && (
-                <div
-                  role="menu"
-                  aria-labelledby={`menubutton-${menu.id}`}
-                  id={`menu-${menu.id}-list`}
-                  tabIndex={-1}
-                  onKeyDown={handleMenuKeyDown(menu.id)}
-                  className={clsx(
-                    "absolute left-0 z-50 mt-1 min-w-48 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg",
-                  )}
-                >
-                  <div className="py-1">
-                    {menu.items.map((item, rawIndex) => {
-                      if (item.separator) {
-                        return (
-                          <div
-                            key={`sep-${rawIndex}`}
-                            role="separator"
-                            className="my-1 border-t border-slate-200"
-                          />
-                        );
-                      }
-
-                      // Map raw index to focusable index for id
-                      const focusables = focusableMap[menu.id]?.focusables ?? [];
-                      const focusIdx = focusables.findIndex(({ i }) => i === rawIndex);
-                      const isDisabled = !!item.disabled;
-                      const isActive = activeItemIdx === focusIdx && !isDisabled;
-
+              <ConstrainedMenu
+                open={isOpen}
+                anchorEl={buttonRefs.current[menu.id] || null}
+                labelledBy={`menubutton-${menu.id}`}
+                menuId={`menu-${menu.id}-list`}
+                onKeyDown={handleMenuKeyDown(menu.id)}
+              >
+                <div className="py-1">
+                  {menu.items.map((item, rawIndex) => {
+                    if (item.separator) {
                       return (
-                        <button
-                          key={item.id}
-                          id={`menu-${menu.id}-item-${focusIdx}`}
-                          role="menuitem"
-                          tabIndex={-1}
-                          aria-disabled={isDisabled}
-                          disabled={isDisabled}
-                          onMouseEnter={() => {
-                            if (!isDisabled && focusIdx >= 0) setActiveItemIdx(focusIdx);
-                          }}
-                          onClick={() => triggerSelect(menu.id, item)}
-                          className={clsx(
-                            "flex w-full items-center justify-between gap-4 px-3 py-2 text-left text-[13px]",
-                            isActive
-                              ? "bg-sky-50 text-sky-900"
-                              : "hover:bg-slate-50",
-                            isDisabled && "opacity-50 cursor-not-allowed"
-                          )}
-                        >
-                          <span>{item.label}</span>
-                          {item.shortcut && (
-                            <span className="font-mono text-[11px] opacity-60">{item.shortcut}</span>
-                          )}
-                        </button>
+                        <div
+                          key={`sep-${rawIndex}`}
+                          role="separator"
+                          className="my-1 border-t border-slate-200"
+                        />
                       );
-                    })}
-                  </div>
+                    }
+
+                    // Map raw index to focusable index for id
+                    const focusables = focusableMap[menu.id]?.focusables ?? [];
+                    const focusIdx = focusables.findIndex(({ i }) => i === rawIndex);
+                    const isDisabled = !!item.disabled;
+                    const isActive = activeItemIdx === focusIdx && !isDisabled;
+
+                    return (
+                      <button
+                        key={item.id}
+                        id={`menu-${menu.id}-item-${focusIdx}`}
+                        role="menuitem"
+                        tabIndex={-1}
+                        aria-disabled={isDisabled}
+                        disabled={isDisabled}
+                        onMouseEnter={() => {
+                          if (!isDisabled && focusIdx >= 0) setActiveItemIdx(focusIdx);
+                        }}
+                        onClick={() => triggerSelect(menu.id, item)}
+                        className={clsx(
+                          "flex w-full items-center justify-between gap-4 px-3 py-2 text-left text-[13px]",
+                          isActive
+                            ? "bg-sky-50 text-sky-900"
+                            : "hover:bg-slate-50",
+                          isDisabled && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        <span>{item.label}</span>
+                        {item.shortcut && (
+                          <span className="font-mono text-[11px] opacity-60">{item.shortcut}</span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
+              </ConstrainedMenu>
             </div>
           );
         })}
       </nav>
+    </div>
+  );
+}
+
+function ConstrainedMenu({
+  open,
+  anchorEl,
+  labelledBy,
+  menuId,
+  onKeyDown,
+  align = "start",            // ← default: left cuando es bottom/top
+  preferred = "bottom",       // ← default: abajo
+  children,
+}: {
+  open: boolean;
+  anchorEl: HTMLElement | null;
+  labelledBy: string;
+  menuId: string;
+  onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
+  align?: "start" | "center" | "end";
+  preferred?: "bottom" | "top" | "left" | "right";
+  children: React.ReactNode;
+}) {
+  const popRef = React.useRef<HTMLDivElement | null>(null);
+
+  useConstrainedPopover({
+    open,
+    popoverRef: popRef as React.RefObject<HTMLElement>,
+    triggerEl: anchorEl,
+    preferred,
+    align,           // ← pasa el align
+    gap: 8,
+    padding: 8,
+  });
+
+  if (!open) return null;
+
+  return (
+    <div
+      ref={popRef}
+      role="menu"
+      aria-labelledby={labelledBy}
+      id={menuId}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      className="fixed z-50 min-w-48 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg
+                 max-w-[calc(100vw-16px)] max-h-[calc(100dvh-16px)] overflow-auto overscroll-contain"
+    >
+      {children}
     </div>
   );
 }
