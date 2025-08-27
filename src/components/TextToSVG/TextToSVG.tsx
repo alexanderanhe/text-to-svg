@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "../KCmdModal";
-import { CircleIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
+import { CircleIcon, CursorIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, SortAmountDownIcon, SortAmountUpIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
 import { Drawer } from "vaul";
 import ClassicMenuBar, { type Menu } from "../ClassicMenuBar";
 import { BrushSizeSelect } from "../BrushSizeSelect";
@@ -629,10 +629,35 @@ export default function TextToSVG() {
         rotation: 0,
         align: "left",
       };
-      ensureFont(fontFamily, fonts, fontCacheRef.current, pendingLoadsRef.current, setStatus, drawPreview);
+      const f = ensureFont(fontFamily, fonts, fontCacheRef.current, pendingLoadsRef.current, setStatus, drawPreview);
       setStrokes(prev => [...prev, textStroke]);
       setSelectedIds([textStroke.id]);
       drawPreview();
+
+      setTool("select");
+      // Posicionar overlay input
+      const wrap = wrapRef.current!;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.clientWidth / canvas.width;
+      const scaleY = canvas.clientHeight / canvas.height;
+      const w = (() => {
+        if (!f) return 240;
+        const lines = textStroke.text.split("\n");
+        let maxW = 0;
+        for (const line of lines) {
+          const p = f.getPath(line, 0, 0, textStroke.size);
+          const b = p.getBoundingBox();
+          maxW = Math.max(maxW, (b.x2 - b.x1) || 0);
+        }
+        return Math.max(160, maxW) * scaleX;
+      })();
+      setEditing({
+        id: textStroke.id,
+        value: textStroke.text,
+        left: (rect.left + (textStroke.x * scaleX)) - wrap.getBoundingClientRect().left,
+        top:  (rect.top  + (textStroke.y * scaleY) - textStroke.size * scaleY), // por encima de la baseline
+        width: w,
+      });
       return;
     }
 
@@ -1598,6 +1623,7 @@ export default function TextToSVG() {
                     title="Traer al frente"
                     ariaLabel="Traer al frente"
                     onClick={() => bringToFront(selectedIds)}
+                    disabled={!selectedIds.length}
                   >
                     <LayerUpIcon className="size-6" />
                   </IconButton>
@@ -1606,6 +1632,7 @@ export default function TextToSVG() {
                     title="Enviar al fondo"
                     ariaLabel="Enviar al fondo"
                     onClick={() => sendToBack(selectedIds)}
+                    disabled={!selectedIds.length}
                   >
                     <LayerDownIcon className="size-6" />
                   </IconButton>
@@ -1614,6 +1641,7 @@ export default function TextToSVG() {
                     title="Subir una capa"
                     ariaLabel="Subir una capa"
                     onClick={() => bringForward(selectedIds)}
+                    disabled={!selectedIds.length}
                   >
                     <SortAmountUpIcon className="size-6" />
                   </IconButton>
@@ -1622,6 +1650,7 @@ export default function TextToSVG() {
                     title="Bajar una capa"
                     ariaLabel="Bajar una capa"
                     onClick={() => sendBackward(selectedIds)}
+                    disabled={!selectedIds.length}
                   >
                     <SortAmountDownIcon className="size-6" />
                   </IconButton>
@@ -1631,6 +1660,7 @@ export default function TextToSVG() {
                     ariaLabel="Eliminar"
                     variant="danger"
                     onClick={deleteSelected}
+                    disabled={!selectedIds.length}
                   >
                     <TrashIcon className="size-6" />
                   </IconButton>
@@ -1856,7 +1886,7 @@ export default function TextToSVG() {
             className={`px-3 py-2 rounded-lg ${tool === "select" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
             onClick={() => setTool("select")}
           >
-            <SquareDashedIcon className="size-4 md:size-8" />
+            <CursorIcon className="size-4 md:size-8 rotate-20" />
           </button>
           <button
             type="button"
