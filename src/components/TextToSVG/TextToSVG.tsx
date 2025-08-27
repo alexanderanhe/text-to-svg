@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "../KCmdModal";
-import { CircleIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, PlusIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
+import { CircleIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, SortAmountDownIcon, SortAmountUpIcon, SquareDashedIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
 import { Drawer } from "vaul";
 import ClassicMenuBar, { type Menu } from "../ClassicMenuBar";
 import { BrushSizeSelect } from "../BrushSizeSelect";
@@ -1519,19 +1519,11 @@ export default function TextToSVG() {
                     label={fontFamily || "Fuente"}
                     fonts={fonts}
                     handleFontChange={(f) => { handleFontChange(f); }}
+                    onUploadTTF={onUploadTTF}
                     API_KEY={API_KEY}
                   />
                 </div>
 
-                <div className="w-auto">
-                  <Label>Nueva</Label>
-                  <div className="flex items-center gap-2 h-11">
-                    <label className="px-2 py-1 border rounded cursor-pointer">
-                      <PlusIcon className="inline size-6" />
-                      <input type="file" className="hidden" accept=".ttf,.otf" onChange={onUploadTTF} />
-                    </label>
-                  </div>
-                </div>
                 <div className="w-14 sm:w-auto">
                   <Label>Height</Label>
                   <input

@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { PlusIcon } from "./ui";
 
 type KCmdKModalProps = {
   title?: string;                  // (opcional) título del modal
   label?: string;                  // (opcional) etiqueta para el input
   fonts: [string, string][];       // lista de fuentes como tuplas [nombre, url]
   handleFontChange: (font: string) => void; // función para cambiar la fuente
+  onUploadTTF: (e: ChangeEvent<HTMLInputElement>) => void;
   API_KEY?: string;                // (opcional) clave de API para Google Fonts
 };
 
@@ -13,6 +15,7 @@ export default function KCmdKModal({
   label = "Fuente",
   fonts,
   handleFontChange,
+  onUploadTTF,
   API_KEY
 }: KCmdKModalProps) {
   const [open, setOpen] = useState(false);
@@ -235,6 +238,12 @@ export default function KCmdKModal({
               Consejo: agrega <code>VITE_GOOGLE_FONTS_KEY</code> a tu <code>.env</code> para cargar todas las fuentes.
             </div>
           )}
+          <div className="border-t-2 border-gray-200 pt-4">
+            <label className="px-4 py-2 rounded-lg border shadow-sm p-0 flex items-center justify-center hover:shadow focus:outline-none focus:ring-2 focus:ring-neutral-600 bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50">
+              Nueva fuente <PlusIcon className="inline size-6" />
+              <input id="uploadFontInputFile" type="file" className="hidden" accept=".ttf,.otf" onChange={onUploadTTF} />
+            </label>
+          </div>
         </div>
       </div>
     </div>
