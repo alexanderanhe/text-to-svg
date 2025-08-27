@@ -1815,9 +1815,9 @@ export default function TextToSVG() {
                                 </div>
                               </li>
                             ))}
-                            <li>
+                            {/* <li>
                               <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre>
-                            </li>
+                            </li> */}
                           </ul>
                         </div>
                       </div>
