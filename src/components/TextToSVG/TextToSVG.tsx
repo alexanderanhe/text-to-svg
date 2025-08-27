@@ -5,7 +5,7 @@ import { CircleIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, File
 import { Drawer } from "vaul";
 import ClassicMenuBar, { type Menu } from "../ClassicMenuBar";
 import { BrushSizeSelect } from "../BrushSizeSelect";
-import type { Tool, Pt, PenStroke, EraserStroke, TextStroke, SvgStroke, Stroke, Handle, FontGoogle, ShapeKind, ShapeStroke } from "../../types/strokes";
+import type { Tool, Pt, PenStroke, EraserStroke, TextStroke, SvgStroke, Stroke, Handle, FontGoogle, ShapeKind, ShapeStroke, StrokeType } from "../../types/strokes";
 import { ensureFont, ensureFontAsync, listFonts } from "../../utils/fontUtils";
 import { isFontFile, isSvgFile } from "../../utils/fileUtils";
 import { extractSvgInner, parseSVGMeta } from "../../utils/svgUtils";
@@ -47,6 +47,7 @@ export default function TextToSVG() {
   const [status, setStatus] = useState<string>("");
   const [dragActive, setDragActive] = useState(false);
   const dragDepthRef = useRef(0);
+  const [openDrawer, setOpenDrawer] = useState(false);
 
   // Herramientas / lápiz
   const [tool, setTool] = useState<Tool>("text");
@@ -60,6 +61,10 @@ export default function TextToSVG() {
   const [shapeRadius, setShapeRadius] = useState<number>(12); // rect redondeado
   const creatingShapeRef = useRef<ShapeStroke | null>(null);
 
+  // util
+  const isBreak = (p: Pt) => !Number.isFinite(p.x) || !Number.isFinite(p.y);
+  const BREAK: Pt = { x: Number.NaN, y: Number.NaN };
+  const currentPenIdRef = useRef<string | null>(null);
 
 
   // Documento
@@ -124,10 +129,16 @@ export default function TextToSVG() {
       }
     };
     resize();
+    console.log("ResizeObserver");
     const ro = new ResizeObserver(resize);
     ro.observe(c);
     return () => ro.disconnect();
   }, []);
+
+  // si cambias de herramienta o de estilo, “cierra” el pen activo
+  useEffect(() => { if (tool !== "pen") currentPenIdRef.current = null; }, [tool]);
+  // si cambias color/tamaño, empezará un stroke nuevo
+  useEffect(() => { currentPenIdRef.current = null; }, [penColor, penSize]);
 
 
   const menus: Menu[] = [
@@ -157,6 +168,13 @@ export default function TextToSVG() {
       label: "Imagen",
       items: [
         { id: "importar-imagen", label: "Importar Imagen...", shortcut: "", onSelect: handleUploadImage },
+      ],
+    },
+    {
+      id: "ver",
+      label: "Ver",
+      items: [
+        { id: "capas", label: "Capas...", shortcut: "", onSelect: () => setOpenDrawer(a => !a) },
       ],
     },
   ];
@@ -210,7 +228,7 @@ export default function TextToSVG() {
 
 
   // ==== Redibujo ====
-  useEffect(() => { drawPreview(); }, [strokes, fill, bg, tool, transparentBG, lineHeight]);
+  useEffect(() => { drawPreview(); }, [strokes, bg]);
 
   function getCtx(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -298,9 +316,14 @@ export default function TextToSVG() {
     ctx.lineJoin = "round";
     ctx.strokeStyle = s.color;
     ctx.lineWidth = s.size;
+  
     ctx.beginPath();
-    ctx.moveTo(s.points[0].x, s.points[0].y);
-    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+    let started = false;
+    for (const pt of s.points) {
+      if (isBreak(pt)) { started = false; continue; }
+      if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+      else { ctx.lineTo(pt.x, pt.y); }
+    }
     ctx.stroke();
     ctx.restore();
   }
@@ -523,7 +546,49 @@ export default function TextToSVG() {
       return;
     }
 
-    if (tool === "pen" || tool === "eraser") {
+    if (tool === "pen") {
+      setStrokes(prev => {
+        const arr = [...prev];
+
+        // intenta reusar el pen activo
+        let s = currentPenIdRef.current
+          ? (arr.find(st => st.id === currentPenIdRef.current) as PenStroke | undefined)
+          : undefined;
+
+        const canReuse =
+          s && s.type === "pen" && s.color === penColor && s.size === penSize;
+
+        if (!canReuse) {
+          // crea uno nuevo
+          s = {
+            id: uid(),
+            type: "pen",
+            z: getMaxZ(arr) + 1,
+            visible: true,
+            locked: false,
+            color: penColor,
+            size: penSize,
+            points: [],
+          } as PenStroke;
+          arr.push(s);
+          currentPenIdRef.current = s.id;
+        }
+
+        // separador para NO unir con el segmento anterior
+        if (s!.points.length && !isBreak(s!.points[s!.points.length - 1])) {
+          s!.points.push(BREAK);
+        }
+        s!.points.push(p);
+
+        drawingRef.current = s!;   // guarda referencia para el move
+        return arr;
+      });
+      drawPreview();
+      return;
+    }
+
+    if (tool === "eraser") {
+      // (Comportamiento igual que antes; si quieres, puedes hacer la misma reutilización que con pen)
       let z = nextZ;
       if (e.shiftKey && selectedIds.length) {
         const target = strokes.find(s => s.id === selectedIds[0]);
@@ -531,20 +596,21 @@ export default function TextToSVG() {
       }
       const s = {
         id: uid(),
-        type: tool,
+        type: "eraser",
         z,
         visible: true,
         locked: false,
         color: penColor,
         size: penSize,
         points: [p],
-      } as PenStroke | EraserStroke;
+      } as EraserStroke;
 
-      drawingRef.current = s;                 // ← mantiene el trazo activo
+      drawingRef.current = s;
       setStrokes(prev => normalizeZ([...prev, s]));
-      drawPreview();                           // feedback inmediato
+      drawPreview();
       return;
     }
+
 
     if (tool === "text") {
       const textStroke: TextStroke = {
@@ -869,7 +935,63 @@ export default function TextToSVG() {
 
   // ==== Acciones ====
   function clearCanvas() { setStrokes([]); }
-  function undo() { setStrokes(s => s.slice(0, -1)); }
+  function undo() {
+    if (tool === "pen" && (currentPenIdRef.current || strokes.some(s => s.type === "pen"))) {
+      undoLastPenSegment();
+    } else {
+      // fallback a tu undo global anterior
+      setStrokes(s => s.slice(0, -1));
+    }
+  }
+  function undoLastPenSegment() {
+    setStrokes(prev => {
+      const arr = [...prev];
+
+      // 1) Preferir el pen "activo"
+      let idx = arr.findIndex(s => s.id === currentPenIdRef.current);
+
+      // 2) Si no hay activo, toma el ÚLTIMO pen que exista
+      if (idx === -1) {
+        for (let i = arr.length - 1; i >= 0; i--) {
+          if (arr[i].type === "pen") { idx = i; break; }
+        }
+      }
+      if (idx === -1) return prev; // no hay pen
+
+      const pen = arr[idx] as PenStroke;
+      if (!pen.points.length) {
+        arr.splice(idx, 1);
+        if (currentPenIdRef.current === pen.id) currentPenIdRef.current = null;
+        return arr;
+      }
+
+      // 3) Saltar breaks al final (defensivo)
+      let i = pen.points.length - 1;
+      while (i >= 0 && isBreak(pen.points[i])) i--;
+      if (i < 0) { // solo breaks → borra stroke
+        arr.splice(idx, 1);
+        if (currentPenIdRef.current === pen.id) currentPenIdRef.current = null;
+        return arr;
+      }
+
+      // 4) Recortar hasta el break previo (quita el segmento final)
+      let start = i;
+      while (start >= 0 && !isBreak(pen.points[start])) start--;
+      // mantener hasta el break (incluido), o vacío si no había breaks
+      pen.points = pen.points.slice(0, start + 1);
+
+      // 5) Limpia breaks sobrantes al final
+      while (pen.points.length && isBreak(pen.points[pen.points.length - 1])) pen.points.pop();
+
+      // 6) Si quedó vacío, elimina el stroke y resetea el activo
+      if (pen.points.length === 0) {
+        arr.splice(idx, 1);
+        if (currentPenIdRef.current === pen.id) currentPenIdRef.current = null;
+      }
+      return arr;
+    });
+  }
+
   function deleteSelected() {
     if (!selectedIds.length) return;
     setStrokes(prev => prev.filter(s => !selectedIds.includes(s.id)));
@@ -1048,6 +1170,18 @@ export default function TextToSVG() {
     ctx.restore();
   }
 
+  function penToPathD(s: PenStroke) {
+    let d = "";
+    let started = false;
+    for (const pt of s.points) {
+      if (isBreak(pt)) { started = false; continue; }
+      if (!started) { d += (d ? " " : "") + `M ${pt.x} ${pt.y}`; started = true; }
+      else { d += ` L ${pt.x} ${pt.y}`; }
+    }
+    return d;
+  }
+
+
   // ==== Exportar SVG con máscara (respeta goma) ====
   function exportSVG({ eraseBackgroundToo = false }: { eraseBackgroundToo?: boolean } = {}) {
     const canvas = canvasRef.current;
@@ -1128,12 +1262,7 @@ export default function TextToSVG() {
 
     for (const s of sorted) {
       if (s.type === "pen") {
-        if (s.points.length < 2) continue;
-        let d = `M ${s.points[0].x} ${s.points[0].y}`;
-        for (let i = 1; i < s.points.length; i++) {
-          const p = s.points[i];
-          d += ` L ${p.x} ${p.y}`;
-        }
+        const d = penToPathD(s);
         contentEls.push(
           `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`
         );
@@ -1324,6 +1453,40 @@ export default function TextToSVG() {
     return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
   }
 
+  function updateSelectedPatch<P>(
+    value: P,
+    setLocal: (v: P) => void,
+    opts: {
+      types?: StrokeType[];
+      patch: (s: Stroke, v: P) => Partial<Stroke>; // devuelve el “parche” por stroke
+      draw?: boolean;
+    }
+  ) {
+    const { types, patch } = opts;
+    setLocal(value);
+
+    setStrokes(prev => {
+      const next = prev.map(s => {
+        if (!selectedIds.includes(s.id)) return s;
+        if (types && !types.includes(s.type)) return s;
+
+        const p = patch(s, value) || {};
+        const keys = Object.keys(p) as (keyof Stroke)[];
+        if (!keys.length) return s;
+
+        let changed = false;
+        for (const k of keys) {
+          if (s[k] !== p[k]) { changed = true; break; }
+        }
+        if (!changed) return s;
+
+        return { ...s, ...p } as Stroke;
+      });
+      return next;
+    });
+  }
+
+
   // ==== JSX ====
   return (
     <div className="w-full h-dvh max-w-6xl mx-auto p-2 grid gap-1 grid-rows-[auto_1fr_auto]">
@@ -1378,7 +1541,10 @@ export default function TextToSVG() {
                     min={0.8}
                     max={3}
                     value={lineHeight}
-                    onChange={(e) => setLineHeight(+e.target.value || 1.2)}
+                    onChange={(e) => updateSelectedPatch(+e.target.value || 1.2, setLineHeight, { 
+                      types: ["text"],
+                      patch: (_s, v) => ({ lineHeight: v }),
+                    })}
                   />
                 </div>
 
@@ -1388,7 +1554,10 @@ export default function TextToSVG() {
                     <FillPicker
                       label="Color de texto"
                       value={fill}
-                      onChange={setFill}
+                      onChange={(v) => updateSelectedPatch(v, setFill, { 
+                        types: ["text"],
+                        patch: (_s, v) => ({ fill: v }),
+                      })}
                     />
                     <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
                   </div>
@@ -1404,7 +1573,10 @@ export default function TextToSVG() {
                     <FillPicker
                       label="Pencil Color"
                       value={penColor}
-                      onChange={setPenColor}
+                      onChange={(v) => updateSelectedPatch(v, setPenColor, { 
+                        types: ["pen"],
+                        patch: (_s, v) => ({ color: v }),
+                      })}
                       placement="bottom-right"
                     />
                     <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
@@ -1413,7 +1585,15 @@ export default function TextToSVG() {
 
                 <div>
                   <Label>Pencil Width</Label>
-                  <BrushSizeSelect value={penSize} color={penColor} onChange={setPenSize} className="w-44" />
+                  <BrushSizeSelect
+                    value={penSize}
+                    color={penColor}
+                    onChange={(v) => updateSelectedPatch(v, setPenSize, { 
+                      types: ["pen"],
+                      patch: (_s, v) => ({ size: v }),
+                    })}
+                    className="w-44"
+                  />
                 </div>
               </>
             )}
@@ -1544,14 +1724,9 @@ export default function TextToSVG() {
             <div className="hidden md:block ml-auto">
               <Label>&nbsp;</Label>
               <div className="flex items-center gap-2">
-                <Drawer.Root direction="right">
-                  <Drawer.Trigger>
-                    <IconButton
-                      title="Abrir capas"
-                      ariaLabel="Abrir capas"
-                    >
-                      <LayerIcon className="inline size-6" />
-                    </IconButton>
+                <Drawer.Root direction="right" open={openDrawer} onOpenChange={setOpenDrawer}>
+                  <Drawer.Trigger className="w-14 h-10 rounded-lg border shadow-sm p-0 flex items-center justify-center hover:shadow focus:outline-none focus:ring-2 focus:ring-neutral-600 bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 ">
+                    <LayerIcon className="inline size-6" />
                   </Drawer.Trigger>
                   <Drawer.Portal>
                     <Drawer.Content
@@ -1559,14 +1734,14 @@ export default function TextToSVG() {
                       style={{ '--initial-transform': 'calc(100% + 8px)' } as React.CSSProperties}
                     >
                       <div className="bg-zinc-50 h-full w-full grow p-5 flex flex-col rounded-[16px]">
-                        <div className="max-w-md mx-auto">
+                        <div className="flex flex-col h-full max-w-md mx-auto">
                           <Drawer.Title className="font-medium mb-2 text-zinc-900">
                             Capas y elementos del lienzo
                           </Drawer.Title>
                           <Drawer.Description className="text-zinc-600 mb-2">
                             Aquí puedes ver y gestionar todos los elementos del lienzo.
                           </Drawer.Description>
-                          <ul>
+                          <ul className="flex-1 overflow-y-auto">
                             {strokes.length === 0 && (
                               <li className="text-sm text-zinc-500 italic">No hay elementos</li>
                             )}
@@ -1640,6 +1815,9 @@ export default function TextToSVG() {
                                 </div>
                               </li>
                             ))}
+                            <li>
+                              <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre>
+                            </li>
                           </ul>
                         </div>
                       </div>
@@ -1791,7 +1969,6 @@ export default function TextToSVG() {
           </>
         )}
         <p className="text-xs text-neutral-500">Tip: mantén <kbd>Shift</kbd> al iniciar un trazo para insertarlo debajo de lo seleccionado.</p>
-        {/* <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre> */}
       </div>
     </div>
   );

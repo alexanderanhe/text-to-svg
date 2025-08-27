@@ -57,5 +57,6 @@ export type ShapeStroke = Base & {
 };
 
 export type Stroke = PenStroke | EraserStroke | TextStroke | SvgStroke | ShapeStroke;
+export type StrokeType = Stroke["type"];
 export type Handle = "nw" | "ne" | "sw" | "se";
 export type FontGoogle = [string, string];
