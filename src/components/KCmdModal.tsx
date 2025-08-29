@@ -151,7 +151,7 @@ export default function KCmdKModal({
         className="w-full inline-flex items-center gap-2 p-2 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-50"
         title="Abrir buscador (⌘K / Ctrl+K)"
       >
-        <span className="flex-1 text-left">{label}</span>
+        <span className="flex-1 text-left overflow-hidden whitespace-nowrap text-ellipsis">{label}</span>
         <kbd className="ml-1 hidden sm:inline-flex items-center gap-1 rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600 border">
           {/Mac|iPhone|iPad/i.test(navigator.platform) ? "⌘" : "Ctrl"} K
         </kbd>
