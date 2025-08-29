@@ -2059,13 +2059,6 @@ export default function TextToSVG() {
           </button>
           <button
             type="button"
-            className="px-3 py-2 rounded-lg bg-neutral-200 text-neutral-800"
-            onClick={handleUploadImage}
-          >
-            <ImagePlusIcon className="size-4 md:size-8" />
-          </button>
-          <button
-            type="button"
             className={`px-3 py-2 rounded-lg ${tool === "pen" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
             onClick={() => setTool("pen")}
           >
@@ -2078,6 +2071,15 @@ export default function TextToSVG() {
           >
             <ErraserIcon className="size-4 md:size-8" />
           </button>
+          <span className="h-px w-2/3 my-1 mx-auto bg-gray-200">&nbsp;</span>
+          <button
+            type="button"
+            className="px-3 py-2 rounded-lg bg-neutral-200 text-neutral-800"
+            onClick={handleUploadImage}
+          >
+            <ImagePlusIcon className="size-4 md:size-8" />
+          </button>
+          <span className="h-px w-2/3 my-1 mx-auto bg-gray-200">&nbsp;</span>
           <FillPicker
             label="Fondo"
             value={bg}
