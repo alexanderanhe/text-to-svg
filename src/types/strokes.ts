@@ -15,10 +15,15 @@ export type PenStroke = Base & {
   points: Pt[];
 };
 
-export type EraserStroke = Base & {
+export type EraserStroke = {
+  id: string;
   type: "eraser";
+  z: number;
+  visible: boolean;
+  locked: boolean;
   size: number;
   points: Pt[];
+  targetIds: string[];
 };
 
 export type TextStroke = Base & {

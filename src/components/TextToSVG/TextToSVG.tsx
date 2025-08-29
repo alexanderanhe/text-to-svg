@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { toast } from 'sonner'
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "../KCmdModal";
 import { CircleIcon, CursorIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, SortAmountDownIcon, SortAmountUpIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
@@ -99,6 +100,59 @@ export default function TextToSVG() {
     startStroke: Stroke;          // snapshot
   }>(null);
 
+  
+  const toolsRef = useRef<HTMLDivElement | null>(null);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+
+  function updateArrows() {
+    const el = toolsRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    const max = Math.max(0, scrollWidth - clientWidth);
+    const EPS = 1; // tolerancia por decimales/AA
+    setCanLeft(scrollLeft > EPS);
+    setCanRight(scrollLeft < max - EPS);
+  }
+
+  useEffect(() => {
+    const el = toolsRef.current;
+    if (!el) return;
+    updateArrows();
+
+    const onScroll = () => updateArrows();
+    el.addEventListener("scroll", onScroll, { passive: true });
+
+    const ro = new ResizeObserver(() => updateArrows());
+    ro.observe(el);
+
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    // cuando cambie la herramienta, regresa al inicio
+    const el = toolsRef.current;
+    if (!el) return;
+    el.scrollTo({ left: 0, behavior: "auto" });
+    // espera al layout para medir bien
+    requestAnimationFrame(updateArrows);
+  }, [tool]); // <-- usa tu estado `tool`
+
+  const handleToolsScroll = (direction: number) => () => {
+    const el = toolsRef.current;
+    if (!el) return;
+    const page = el.clientWidth; // “página” visible
+    const target = Math.max(
+      0,
+      Math.min(el.scrollLeft + page * direction, el.scrollWidth - el.clientWidth)
+    );
+    el.scrollTo({ left: target, behavior: "smooth" });
+  };
+
+
   // ==== Cargar lista de fuentes ====
   useEffect(() => { (async () => setFonts(await listFonts(API_KEY, FALLBACK_FONTS)))(); }, []);
 
@@ -178,6 +232,9 @@ export default function TextToSVG() {
       ],
     },
   ];
+
+  const isSelectedType = (types: Omit<StrokeType, 'select'>[]) =>
+      strokes.find((s) => types.includes(s.type) && selectedIds.includes(s.id)) || !selectedIds.length && types.includes(tool);
 
   // ==== Cambio de fuente “actual” (para nuevos textos) ====
   async function handleFontChange(family: string, opts?: { applyToSelection?: boolean }) {
@@ -263,34 +320,79 @@ export default function TextToSVG() {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
-    // Contenido visible = pen + text (en offscreen)
-    offctx.clearRect(0, 0, off.width, off.height);
-    const sorted = [...strokes].filter(s => s.visible !== false).sort((a,b) => a.z - b.z);
+    // ---- Agrupar borradores por targetId
+    type AnyStroke = typeof strokes[number];
+    type Erase = Extract<AnyStroke, { type: "eraser" }>;
+    const erasersByTarget = new Map<string, Erase[]>();
 
-    // Un único recorrido por capas:
-    offctx.save();
-    for (const s of sorted) {
-      if (s.type === "eraser") { offctx.globalCompositeOperation="destination-out"; drawEraser(offctx, s); offctx.globalCompositeOperation="source-over"; }
-      else if (s.type === "pen") drawPen(offctx, s);
-      else if (s.type === "shape") drawShape(offctx, s as ShapeStroke);   // <---
-      else if (s.type === "svg") drawSVG(offctx, s as SvgStroke);
-      else if (s.type === "text") drawText(offctx, s as TextStroke);
+    for (const s of strokes) {
+      if (s.visible === false || s.type !== "eraser") continue;
+      const targets = s.targetIds as string[] | undefined;
+      if (!Array.isArray(targets) || targets.length === 0) continue;
+      for (const tid of targets) {
+        if (!erasersByTarget.has(tid)) erasersByTarget.set(tid, []);
+        erasersByTarget.get(tid)!.push(s as Erase);
+      }
     }
-    offctx.restore();
 
-    // Pegar en principal
-    ctx.drawImage(off, 0, 0);
+    // ---- Dibuja cada elemento NO-eraser por separado, aplicando SOLO su máscara
+    const drawables = [...strokes]
+      .filter(s => s.visible !== false && s.type !== "eraser")
+      .sort((a, b) => a.z - b.z);
 
-    // (Opcional) dibujar cajas de selección
+    for (const s of drawables) {
+      // limpiar layer
+      offctx.clearRect(0, 0, off.width, off.height);
+
+      // 1) pinta el elemento tal cual
+      offctx.save();
+      offctx.globalCompositeOperation = "source-over";
+      if (s.type === "pen")      drawPen(offctx, s);
+      else if (s.type === "shape") drawShape(offctx, s as ShapeStroke);
+      else if (s.type === "svg")   drawSVG(offctx, s as SvgStroke);
+      else if (s.type === "text")  drawText(offctx, s as TextStroke);
+      offctx.restore();
+
+      // 2) aplica SOLO los borradores que lo apunten
+      const ers = erasersByTarget.get(s.id);
+      if (ers && ers.length) {
+        offctx.save();
+        offctx.globalCompositeOperation = "destination-out";
+        offctx.lineCap = "round";
+        offctx.lineJoin = "round";
+
+        for (const er of ers) {
+          const pts = (er.points || []) as { x: number; y: number }[];
+          if (pts.length < 2) continue;
+          offctx.beginPath();
+          offctx.lineWidth = er.size;
+          // soporta posibles BREAKs (NaN) si los usas
+          let started = false;
+          for (const pt of pts) {
+            const isBreak = !Number.isFinite(pt.x) || !Number.isFinite(pt.y);
+            if (isBreak) { started = false; continue; }
+            if (!started) { offctx.moveTo(pt.x, pt.y); started = true; }
+            else { offctx.lineTo(pt.x, pt.y); }
+          }
+          offctx.stroke();
+        }
+        offctx.restore();
+      }
+
+      // 3) compón la capa al canvas principal
+      ctx.drawImage(off, 0, 0);
+    }
+
+    // ---- (Opcional) dibujar cajas de selección
     if (selectedIds.length) {
       const dpr = window.devicePixelRatio || 1;
       ctx.save();
       ctx.strokeStyle = "#0af";
       ctx.setLineDash([4, 4]);
       for (const id of selectedIds) {
-        const s = strokes.find(st => st.id === id);
-        if (!s) continue;
-        const b = getStrokeBounds(s);
+        const st = strokes.find(st => st.id === id);
+        if (!st) continue;
+        const b = getStrokeBounds(st);
         if (!b) continue;
         // caja
         ctx.strokeRect(b.x, b.y, b.w, b.h);
@@ -327,19 +429,7 @@ export default function TextToSVG() {
     ctx.stroke();
     ctx.restore();
   }
-  function drawEraser(ctx: CanvasRenderingContext2D, s: EraserStroke) {
-    if (s.points.length < 2) return;
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = s.size;
-    ctx.beginPath();
-    ctx.moveTo(s.points[0].x, s.points[0].y);
-    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
-    ctx.stroke();
-    ctx.restore();
-  }
+
   function drawShape(ctx: CanvasRenderingContext2D, s: ShapeStroke) {
     ctx.save();
     ctx.lineCap = "round";
@@ -588,29 +678,35 @@ export default function TextToSVG() {
     }
 
     if (tool === "eraser") {
-      // (Comportamiento igual que antes; si quieres, puedes hacer la misma reutilización que con pen)
+      const p = getCanvasPos(e.currentTarget, e);
+
+      if (!selectedIds.length) {
+        toast('Selecciona un elemento para borrar');
+        return;
+      }
+
       let z = nextZ;
       if (e.shiftKey && selectedIds.length) {
         const target = strokes.find(s => s.id === selectedIds[0]);
         if (target) z = target.z - 0.5;
       }
-      const s = {
+
+      const s: EraserStroke = {
         id: uid(),
         type: "eraser",
         z,
         visible: true,
         locked: false,
-        color: penColor,
         size: penSize,
         points: [p],
-      } as EraserStroke;
+        targetIds: [...selectedIds],   // ← clave: apunta a la selección actual
+      };
 
       drawingRef.current = s;
       setStrokes(prev => normalizeZ([...prev, s]));
       drawPreview();
       return;
     }
-
 
     if (tool === "text") {
       const textStroke: TextStroke = {
@@ -1135,7 +1231,7 @@ export default function TextToSVG() {
           setFonts(prev => [[name, ""], ...prev]);
           setFontFamily(name);
           setStatus(`Fuente cargada: ${name}`);
-          setTool("text");
+          // setTool("text");
         } catch (err: any) {
           setStatus("No pude parsear el TTF/OTF: " + (err?.message || err));
         }
@@ -1206,15 +1302,14 @@ export default function TextToSVG() {
     return d;
   }
 
-
   // ==== Exportar SVG con máscara (respeta goma) ====
-  function exportSVG({ eraseBackgroundToo = false }: { eraseBackgroundToo?: boolean } = {}) {
+  function exportSVG() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const sorted = [...strokes].filter(s => s.visible !== false).sort((a, b) => a.z - b.z);
 
-    // ---- PASO 1: calcular bounds (solo contenido visible, sin goma)
+    // ---- PASO 1: bounds (solo contenido visible NO-eraser)
     let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
     const pushBounds = (x1:number,y1:number,x2:number,y2:number) => {
       xMin = Math.min(xMin, x1); yMin = Math.min(yMin, y1);
@@ -1222,6 +1317,7 @@ export default function TextToSVG() {
     };
 
     for (const s of sorted) {
+      if (s.type === "eraser") continue;
       if (s.type === "pen") {
         if (s.points.length < 2) continue;
         let minX = s.points[0].x, minY = s.points[0].y, maxX = minX, maxY = minY;
@@ -1261,7 +1357,6 @@ export default function TextToSVG() {
           const h = (sh.strokeWidth || 0) / 2 + AA_MARGIN;
           pushBounds(minX - h, minY - h, maxX + h, maxY + h);
         } else {
-          // rect / ellipse usan bbox con posible w/h negativos
           const x = sh.w >= 0 ? sh.x : sh.x + sh.w;
           const y = sh.h >= 0 ? sh.y : sh.y + sh.h;
           const w = Math.abs(sh.w);
@@ -1281,15 +1376,70 @@ export default function TextToSVG() {
     const vbH = Math.max(1, Math.ceil(yMax - yMin));
     const T = `transform="translate(${-xMin},${-yMin})"`;
 
-    // ---- PASO 2: strings en orden de z
-    const contentEls: string[] = [];
-    const eraserMask: string[] = [];
+    // ---- PASO 2: máscaras por target (solo erasers con targetIds)
+    type AnyStroke = typeof strokes[number];
+    type Erase = Extract<AnyStroke, { type: "eraser" }>;
+    const erasersByTarget = new Map<string, Erase[]>();
 
     for (const s of sorted) {
+      if (s.type !== "eraser") continue;
+      const targets = s.targetIds as string[] | undefined;
+      if (!Array.isArray(targets) || targets.length === 0) continue;
+      for (const tid of targets) {
+        if (!erasersByTarget.has(tid)) erasersByTarget.set(tid, []);
+        erasersByTarget.get(tid)!.push(s as Erase);
+      }
+    }
+
+    const pathDFromPoints = (pts: {x:number;y:number}[]) => {
+      let d = "";
+      let started = false;
+      for (const pt of pts) {
+        const isBreak = !Number.isFinite(pt.x) || !Number.isFinite(pt.y);
+        if (isBreak) { started = false; continue; }
+        if (!started) { d += (d ? " " : "") + `M ${pt.x} ${pt.y}`; started = true; }
+        else { d += ` L ${pt.x} ${pt.y}`; }
+      }
+      return d;
+    };
+
+    const maskDefs: string[] = [];
+    for (const [tid, ers] of erasersByTarget) {
+      const PAD = 2;
+      const ix1 = Math.floor(xMin - PAD), iy1 = Math.floor(yMin - PAD);
+      const iw  = Math.ceil(xMax - xMin + 2*PAD);
+      const ih  = Math.ceil(yMax - yMin + 2*PAD);
+      const lines = ers
+        .filter(er => er.points?.length >= 2)
+        .map(er => {
+          const d = pathDFromPoints(er.points);
+          return `<path d="${d}" fill="none" stroke="black" stroke-width="${er.size}" stroke-linecap="round" stroke-linejoin="round"/>`;
+        })
+        .join("\n");
+      maskDefs.push(`
+      <mask id="m_${tid}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"
+            x="${ix1}" y="${iy1}" width="${iw}" height="${ih}">
+        <rect x="${ix1}" y="${iy1}" width="${iw}" height="${ih}" fill="white"/>
+        <g transform="translate(0,0)">
+          ${lines}
+        </g>
+      </mask>`);
+    }
+
+    // ---- PASO 3: contenido en orden de z, aplicando mask por-id cuando exista
+    const contentEls: string[] = [];
+
+    for (const s of sorted) {
+      if (s.type === "eraser") continue;
+
+      const maskAttr = erasersByTarget.has(s.id) ? ` mask="url(#m_${s.id})"` : "";
+
       if (s.type === "pen") {
         const d = penToPathD(s);
         contentEls.push(
-          `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`
+          `<g${maskAttr}>
+            <path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>`
         );
         continue;
       }
@@ -1299,91 +1449,73 @@ export default function TextToSVG() {
         if (!f) continue;
         const lines = (s.text || "").split("\n").map(l => l || " ");
         let y = s.y;
+        const parts: string[] = [];
         for (const line of lines) {
           const x = s.x + alignShiftX(f, line, s.size, s.align);
           const p = f.getPath(line, x, y, s.size);
-          contentEls.push(`<path d="${p.toPathData(3)}" fill="${s.fill}"/>`);
+          parts.push(`<path d="${p.toPathData(3)}" fill="${s.fill}"/>`);
           y += s.size * s.lineHeight;
         }
+        contentEls.push(`<g${maskAttr}>${parts.join("\n")}</g>`);
         continue;
       }
 
       if (s.type === "svg") {
-        const inner = extractSvgInner(s.svg);              // <- sin prolog/doctype/comments
+        const inner = extractSvgInner(s.svg); // sin prolog/doctype/comments
         const vbX = s.vbX ?? 0, vbY = s.vbY ?? 0;
         const rot = s.rotation ? ` rotate(${(s.rotation * 180 / Math.PI).toFixed(3)})` : "";
-        // IMPORTANTE: usa coordenadas ABSOLUTAS aquí; el grupo exterior ya tiene T = translate(-xMin,-yMin)
         contentEls.push(
-          `    <g transform="translate(${s.x},${s.y}) scale(${s.scale})${rot} translate(${-vbX},${-vbY})">\n` +
-          `      ${inner}\n` +
-          `    </g>`
+          `<g${maskAttr} transform="translate(${s.x},${s.y}) scale(${s.scale})${rot} translate(${-vbX},${-vbY})">
+            ${inner}
+          </g>`
         );
         continue;
       }
 
       if (s.type === "shape") {
         const sh = s as ShapeStroke;
-        // OJO: aquí NO restes xMin/yMin; ya lo hace el <g ${T}> padre
         if (sh.kind === "rect") {
           const x = sh.w >= 0 ? sh.x : sh.x + sh.w;
           const y = sh.h >= 0 ? sh.y : sh.y + sh.h;
           const w = Math.abs(sh.w), h = Math.abs(sh.h);
           const rx = Math.max(0, Math.min(sh.rx ?? 0, Math.min(w, h)/2));
           contentEls.push(
-            `<rect x="${x}" y="${y}" width="${w}" height="${h}"` +
-            (rx ? ` rx="${rx}" ry="${rx}"` : ``) +
-            ` fill="${sh.fill === "none" ? "none" : sh.fill}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}"/>`
+            `<g${maskAttr}>
+              <rect x="${x}" y="${y}" width="${w}" height="${h}"` +
+              (rx ? ` rx="${rx}" ry="${rx}"` : ``) +
+              ` fill="${sh.fill === "none" ? "none" : sh.fill}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}"/>
+            </g>`
           );
         } else if (sh.kind === "ellipse") {
           const cx = sh.x + sh.w/2, cy = sh.y + sh.h/2;
           const rx = Math.abs(sh.w/2), ry = Math.abs(sh.h/2);
           contentEls.push(
-            `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${sh.fill === "none" ? "none" : sh.fill}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}"/>`
+            `<g${maskAttr}>
+              <ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${sh.fill === "none" ? "none" : sh.fill}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}"/>
+            </g>`
           );
         } else if (sh.kind === "line") {
           contentEls.push(
-            `<line x1="${sh.x}" y1="${sh.y}" x2="${sh.x + sh.w}" y2="${sh.y + sh.h}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`
+            `<g${maskAttr}>
+              <line x1="${sh.x}" y1="${sh.y}" x2="${sh.x + sh.w}" y2="${sh.y + sh.h}" stroke="${sh.stroke}" stroke-width="${sh.strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </g>`
           );
         }
-        continue;
-      }
-
-      if (s.type === "eraser") {
-        if (s.points.length < 2) continue;
-        let d = `M ${s.points[0].x} ${s.points[0].y}`;
-        for (let i = 1; i < s.points.length; i++) {
-          const p = s.points[i];
-          d += ` L ${p.x} ${p.y}`;
-        }
-        eraserMask.push(
-          `<path d="${d}" fill="none" stroke="black" stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"/>`
-        );
         continue;
       }
     }
 
+    // ---- SVG final
     const bgRect = transparentBG ? "" : `  <rect x="0" y="0" width="${vbW}" height="${vbH}" fill="${bg}"/>\n`;
-
-    const mask =
-  `  <defs>
-      <mask id="eraserMask" maskUnits="userSpaceOnUse">
-        <rect x="0" y="0" width="${vbW}" height="${vbH}" fill="white"/>
-        <g ${T}>
-  ${eraserMask.join("\n")}
-        </g>
-      </mask>
-    </defs>`;
-
-    const maskedOpen = eraseBackgroundToo
-      ? `  <g mask="url(#eraserMask)">\n${bgRect}    <g ${T}>\n`
-      : `  ${bgRect}  <g mask="url(#eraserMask)">\n    <g ${T}>\n`;
 
     const svg =
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vbW} ${vbH}" width="${vbW}" height="${vbH}">
-  ${mask}
-  ${maskedOpen}
+    <defs>
+  ${maskDefs.join("\n")}
+    </defs>
+    ${bgRect}
+    <g ${T}>
   ${contentEls.join("\n")}
-      </g>
     </g>
   </svg>`;
 
@@ -1395,6 +1527,7 @@ export default function TextToSVG() {
     a.click();
     URL.revokeObjectURL(url);
   }
+
 
   // ==== Upload TTF/OTF y añadirlo al cache como “Custom” ====
   function onUploadTTF(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1408,7 +1541,7 @@ export default function TextToSVG() {
         setFonts(prev => [[name, ""], ...prev]);
         setFontFamily(name);
         setStatus(`Fuente cargada: ${name}`);
-        setTool("text");
+        // setTool("text");
         drawPreview();
       } catch (err: any) {
         setStatus("No pude parsear el TTF/OTF: " + (err?.message || err));
@@ -1533,345 +1666,365 @@ export default function TextToSVG() {
               />
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1 mb-2">
+          <div className="relative">
+            {canLeft && (
+              <button
+                className="absolute left-0 p-2 h-full rounded-lg border shadow-sm flex items-center justify-center hover:shadow focus:outline-none focus:ring-2 focus:ring-neutral-600 bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 z-10"
+                onClick={handleToolsScroll(-1)}
+                aria-hidden={!canLeft}
+              >
+                {"<"}
+              </button>
+            )}
 
-            { tool === "text" && (
-              <>
-                <div className="w-full max-w-32 sm:max-w-xs">
-                  <Label>Fuente</Label>
-                  <KCmdKModal
-                    title="Fuente (Google Fonts)"
-                    label={fontFamily || "Fuente"}
-                    fonts={fonts}
-                    handleFontChange={(f) => { handleFontChange(f); }}
-                    onUploadTTF={onUploadTTF}
-                    API_KEY={API_KEY}
-                  />
-                </div>
+            {canRight && (
+              <button
+                className="absolute right-0 p-2 h-full rounded-lg border shadow-sm flex items-center justify-center hover:shadow focus:outline-none focus:ring-2 focus:ring-neutral-600 bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 z-10"
+                onClick={handleToolsScroll(1)}
+                aria-hidden={!canRight}
+              >
+                {">"}
+              </button>
+            )}
+            <div className="flex w-full snap-x snap-mandatory [&>*]:snap-center overflow-x-scroll no-scrollbar items-center gap-1 pb-2" ref={toolsRef}>
 
-                <div className="w-14 sm:w-auto">
-                  <Label>Height</Label>
-                  <input
-                    type="number"
-                    step="0.05"
-                    className="w-full p-2 rounded-lg border border-neutral-300"
-                    min={0.8}
-                    max={3}
-                    value={lineHeight}
-                    onChange={(e) => updateSelectedPatch(+e.target.value || 1.2, setLineHeight, { 
-                      types: ["text"],
-                      patch: (_s, v) => ({ lineHeight: v }),
-                    })}
-                  />
-                </div>
+              { isSelectedType(["text"]) && (
+                <>
+                  <div className="min-w-32 sm:w-xs">
+                    <Label>Fuente</Label>
+                    <KCmdKModal
+                      title="Fuente (Google Fonts)"
+                      label={fontFamily || "Fuente"}
+                      fonts={fonts}
+                      handleFontChange={(f) => { handleFontChange(f); }}
+                      onUploadTTF={onUploadTTF}
+                      API_KEY={API_KEY}
+                    />
+                  </div>
 
-                <div className="w-14 sm:w-auto">
-                  <Label>Color</Label>
-                  <div className="relative flex items-center gap-2">
-                    <FillPicker
-                      label="Color de texto"
-                      value={fill}
-                      onChange={(v) => updateSelectedPatch(v, setFill, { 
+                  <div className="min-w-14 sm:w-auto">
+                    <Label>Height</Label>
+                    <input
+                      type="number"
+                      step="0.05"
+                      className="w-full p-2 rounded-lg border border-neutral-300"
+                      min={0.8}
+                      max={3}
+                      value={lineHeight}
+                      onChange={(e) => updateSelectedPatch(+e.target.value || 1.2, setLineHeight, { 
                         types: ["text"],
-                        patch: (_s, v) => ({ fill: v }),
+                        patch: (_s, v) => ({ lineHeight: v }),
                       })}
                     />
-                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
                   </div>
-                </div>
-              </>
-            )}
 
-            { (tool === "pen" || tool === "eraser") && (
-              <>
-                <div className="w-14 sm:w-auto">
-                  <Label>Color</Label>
-                  <div className="relative flex items-center gap-2">
-                    <FillPicker
-                      label="Pencil Color"
-                      value={penColor}
-                      onChange={(v) => updateSelectedPatch(v, setPenColor, { 
-                        types: ["pen"],
-                        patch: (_s, v) => ({ color: v }),
-                      })}
-                      placement="bottom-right"
-                    />
-                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
-                  </div>
-                </div>
-
-                <div>
-                  <Label>Pencil Width</Label>
-                  <BrushSizeSelect
-                    value={penSize}
-                    color={penColor}
-                    onChange={(v) => updateSelectedPatch(v, setPenSize, { 
-                      types: ["pen"],
-                      patch: (_s, v) => ({ size: v }),
-                    })}
-                    className="w-44"
-                  />
-                </div>
-              </>
-            )}
-
-            { tool === "select" && (
-              <div>
-                <Label>Herramientas de selección</Label>
-                <div className="flex items-center gap-2 h-11">
-                  <IconButton
-                    title="Traer al frente"
-                    ariaLabel="Traer al frente"
-                    onClick={() => bringToFront(selectedIds)}
-                    disabled={!selectedIds.length}
-                  >
-                    <LayerUpIcon className="size-6" />
-                  </IconButton>
-
-                  <IconButton
-                    title="Enviar al fondo"
-                    ariaLabel="Enviar al fondo"
-                    onClick={() => sendToBack(selectedIds)}
-                    disabled={!selectedIds.length}
-                  >
-                    <LayerDownIcon className="size-6" />
-                  </IconButton>
-
-                  <IconButton
-                    title="Subir una capa"
-                    ariaLabel="Subir una capa"
-                    onClick={() => bringForward(selectedIds)}
-                    disabled={!selectedIds.length}
-                  >
-                    <SortAmountUpIcon className="size-6" />
-                  </IconButton>
-
-                  <IconButton
-                    title="Bajar una capa"
-                    ariaLabel="Bajar una capa"
-                    onClick={() => sendBackward(selectedIds)}
-                    disabled={!selectedIds.length}
-                  >
-                    <SortAmountDownIcon className="size-6" />
-                  </IconButton>
-
-                  <IconButton
-                    title="Eliminar"
-                    ariaLabel="Eliminar"
-                    variant="danger"
-                    onClick={deleteSelected}
-                    disabled={!selectedIds.length}
-                  >
-                    <TrashIcon className="size-6" />
-                  </IconButton>
-                </div>
-              </div>
-
-            )}
-
-            { (tool === "shape") && (
-              <>
-                <div className="w-28 sm:w-auto">
-                  <Label>Tipo</Label>
-                  <select
-                    className="w-full p-2 rounded-lg border border-neutral-300"
-                    value={shapeKind}
-                    onChange={e => setShapeKind(e.target.value as ShapeKind)}
-                  >
-                    <option value="rect">Rectángulo</option>
-                    <option value="ellipse">Elipse</option>
-                    <option value="line">Línea</option>
-                  </select>
-                </div>
-                {shapeKind === "rect" && (
-                  <div className="w-14">
-                    <Label>Radio</Label>
-                    <Radius
-                      value={shapeRadius}
-                      onChange={setShapeRadius}
-                      min={0}
-                      max={128}        // ajusta si quieres otro rango
-                      step={1}
-                      placement="bottom"  // "top" | "left" | "right"
-                      disabled={shapeKind !== "rect"}  // solo aplica a rectángulos
-                    />
-                  </div>
-                )}
-                {shapeKind !== "line" && (
-                  <div>
-                    <Label>Relleno</Label>
+                  <div className="min-w-14 sm:w-auto">
+                    <Label>Color</Label>
                     <div className="relative flex items-center gap-2">
+                      <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStroke}</span>
                       <FillPicker
-                        label="Relleno"
-                        value={shapeFill}
-                        onChange={setShapeFill}
-                        hasFill={shapeHasFill}
-                        onHasFillChange={setShapeHasFill}
-                        placement="bottom"
+                        label="Color de texto"
+                        value={fill}
+                        onChange={(v) => updateSelectedPatch(v, setFill, { 
+                          types: ["text"],
+                          patch: (_s, v) => ({ fill: v }),
+                        })}
                       />
-                      <span className="hidden sm:block text-xs text-neutral-500">{shapeHasFill ? shapeFill : "Sin relleno"}</span>
                     </div>
                   </div>
-                )}
+                </>
+              )}
 
-                <div className="w-14 sm:w-auto">
-                  <Label>Borde</Label>
-                  <div className="relative flex items-center gap-2">
-                    <FillPicker
-                      label="Borde"
-                      value={shapeStroke}
-                      onChange={setShapeStroke}
-                    />
-                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStroke}</span>
+              { isSelectedType(["pen", "eraser"]) && (
+                <>
+                  <div className="w-14 sm:w-auto">
+                    <Label>Color</Label>
+                    <div className="relative flex items-center gap-2">
+                      <FillPicker
+                        label="Pencil Color"
+                        value={penColor}
+                        onChange={(v) => updateSelectedPatch(v, setPenColor, { 
+                          types: ["pen"],
+                          patch: (_s, v) => ({ color: v }),
+                        })}
+                        placement="bottom-right"
+                      />
+                    </div>
                   </div>
-                </div>
 
-                <div className="w-14 sm:w-auto">
-                  <Label>Grosor</Label>
-                  <div className="relative flex items-center gap-2">
-                    <StrokeWidth
-                      value={shapeStrokeWidth}
-                      onChange={setShapeStrokeWidth}
-                      min={0}
-                      max={64}
-                      step={1}
-                      placement="bottom"   // "top" | "left" | "right"
+                  <div>
+                    <Label>Pencil Width</Label>
+                    <BrushSizeSelect
+                      value={penSize}
+                      color={penColor}
+                      onChange={(v) => updateSelectedPatch(v, setPenSize, { 
+                        types: ["pen"],
+                        patch: (_s, v) => ({ size: v }),
+                      })}
+                      className="w-44"
                     />
-                    <span className="hidden sm:block text-xs text-neutral-500">{shapeStrokeWidth}px</span>
                   </div>
-                </div>
-              </>
-            )}
+                </>
+              )}
 
-            <div className="hidden md:block ml-auto">
-              <Label>&nbsp;</Label>
-              <div className="flex items-center gap-2">
-                <Drawer.Root direction="right" open={openDrawer} onOpenChange={setOpenDrawer}>
-                  <Drawer.Trigger className="w-14 h-10 rounded-lg border shadow-sm p-0 flex items-center justify-center hover:shadow focus:outline-none focus:ring-2 focus:ring-neutral-600 bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 ">
-                    <LayerIcon className="inline size-6" />
-                  </Drawer.Trigger>
-                  <Drawer.Portal>
-                    <Drawer.Content
-                      className="right-2 top-2 bottom-2 fixed z-10 outline-none w-[310px] flex"
-                      style={{ '--initial-transform': 'calc(100% + 8px)' } as React.CSSProperties}
+              { tool == "select" && (
+                <div>
+                  <Label>Herramientas de selección</Label>
+                  <div className="flex items-center gap-2 h-11">
+                    <IconButton
+                      title="Traer al frente"
+                      ariaLabel="Traer al frente"
+                      onClick={() => bringToFront(selectedIds)}
+                      disabled={!selectedIds.length}
                     >
-                      <div className="bg-zinc-50 h-full w-full grow p-5 flex flex-col rounded-[16px]">
-                        <div className="flex flex-col h-full max-w-md mx-auto">
-                          <Drawer.Title className="font-medium mb-2 text-zinc-900">
-                            Capas y elementos del lienzo
-                          </Drawer.Title>
-                          <Drawer.Description className="text-zinc-600 mb-2">
-                            Aquí puedes ver y gestionar todos los elementos del lienzo.
-                          </Drawer.Description>
-                          <ul className="flex-1 overflow-y-auto">
-                            {strokes.length === 0 && (
-                              <li className="text-sm text-zinc-500 italic">No hay elementos</li>
-                            )}
-                            {strokes.slice().sort((a,b)=>b.z - a.z).map(s => (
-                              <li key={s.id} className={`flex items-center justify-between mb-1 p-2 rounded hover:bg-zinc-100 ${selectedIds.includes(s.id) ? 'bg-zinc-200' : ''}`}>
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedIds.includes(s.id)}
-                                    onChange={(e) => {
-                                      const checked = e.target.checked;
-                                      setSelectedIds(prev => {
-                                        if (checked) {
-                                          return [...prev, s.id];
-                                        } else {
-                                          return prev.filter(id => id !== s.id);
-                                        }
-                                      });
-                                    }}
-                                  />
-                                  <span className="text-sm">
-                                    {s.type === "text" && (
-                                      <>
-                                        <TextIcon className="inline size-4 mr-1" />
-                                        {s.text.split("\n")[0].slice(0,20) || "<vacio>"}
-                                      </>
-                                    )}
-                                    {s.type === "pen" && (
-                                      <>
-                                        <PaintBrushIcon className="inline size-4 mr-1" />
-                                        Dibujo
-                                      </>
-                                    )}
-                                    {s.type === "eraser" && (
-                                      <>
-                                        <ErraserIcon className="inline size-4 mr-1" />
-                                        Goma
-                                      </>
-                                    )}
-                                    {s.type === "svg" && (
-                                      <>
-                                      <FileSVGIcon className="inline size-4 mr-1" />
-                                        SVG
-                                      </>
-                                    )}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    onClick={() => {
-                                      setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, visible: !(st.visible ?? true) } : st));
-                                    }}
-                                    title={s.visible === false ? "Mostrar" : "Ocultar"}
-                                  >
-                                    {s.visible === false
-                                      ? <EyeClosedIcon className="inline size-5 text-zinc-400" />
-                                      : <EyeOpenIcon className="inline size-5 text-zinc-700" />
-                                    }
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, locked: !(st.locked ?? false) } : st));
-                                    }}
-                                    title={s.locked ? "Desbloquear" : "Bloquear"}
-                                  >
-                                    {s.locked
-                                      ? <LockClosedIcon className="inline size-5 text-zinc-400" />
-                                      : <LockOpenIcon className="inline size-5 text-zinc-700" />
-                                    }
-                                  </button>
-                                </div>
-                              </li>
-                            ))}
-                            {/* <li>
-                              <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre>
-                            </li> */}
-                          </ul>
-                        </div>
-                      </div>
-                    </Drawer.Content>
-                    <Drawer.Overlay className="fixed inset-0 bg-black/40" />
-                  </Drawer.Portal>
-                </Drawer.Root>
+                      <LayerUpIcon className="size-6" />
+                    </IconButton>
 
-                <IconButton
-                  title="Eliminar ultima capa"
-                  ariaLabel="Eliminar ultima capa"
-                  onClick={undo}
-                >
-                  <FlipBackwardsIcon className="inline size-6" />
-                </IconButton>
-                <span className="w-px h-full bg-gray-400">&nbsp;</span>
-                <IconButton
-                  title="Descargar SVG"
-                  ariaLabel="Descargar SVG"
-                  className="w-20"
-                  onClick={() => exportSVG({ eraseBackgroundToo: false })}
-                >
-                  <span className="text-sm">SVG</span>
-                  <DownloadIcon className="inline size-6" />
-                </IconButton>
-                {/* <button
-                  onClick={() => exportSVG({ eraseBackgroundToo: true })}
-                  className="px-2 py-1 rounded bg-neutral-700 text-white hover:bg-neutral-600 disabled:opacity-50"
-                  title="La goma también recorta el fondo"
-                >
-                  SVG (borra fondo)
-                </button> */}
+                    <IconButton
+                      title="Enviar al fondo"
+                      ariaLabel="Enviar al fondo"
+                      onClick={() => sendToBack(selectedIds)}
+                      disabled={!selectedIds.length}
+                    >
+                      <LayerDownIcon className="size-6" />
+                    </IconButton>
+
+                    <IconButton
+                      title="Subir una capa"
+                      ariaLabel="Subir una capa"
+                      onClick={() => bringForward(selectedIds)}
+                      disabled={!selectedIds.length}
+                    >
+                      <SortAmountUpIcon className="size-6" />
+                    </IconButton>
+
+                    <IconButton
+                      title="Bajar una capa"
+                      ariaLabel="Bajar una capa"
+                      onClick={() => sendBackward(selectedIds)}
+                      disabled={!selectedIds.length}
+                    >
+                      <SortAmountDownIcon className="size-6" />
+                    </IconButton>
+
+                    <IconButton
+                      title="Eliminar"
+                      ariaLabel="Eliminar"
+                      variant="danger"
+                      onClick={deleteSelected}
+                      disabled={!selectedIds.length}
+                    >
+                      <TrashIcon className="size-6" />
+                    </IconButton>
+                  </div>
+                </div>
+
+              )}
+
+              { isSelectedType(["shape"]) && (
+                <>
+                  <div className="min-w-32 sm:w-xs">
+                    <Label>Tipo</Label>
+                    <select
+                      className="w-full p-2 rounded-lg border border-neutral-300"
+                      value={shapeKind}
+                      onChange={e => setShapeKind(e.target.value as ShapeKind)}
+                    >
+                      <option value="rect">Rectángulo</option>
+                      <option value="ellipse">Elipse</option>
+                      <option value="line">Línea</option>
+                    </select>
+                  </div>
+                  {shapeKind === "rect" && (
+                    <div className="w-14">
+                      <Label>Radio</Label>
+                      <Radius
+                        value={shapeRadius}
+                        onChange={setShapeRadius}
+                        min={0}
+                        max={128}        // ajusta si quieres otro rango
+                        step={1}
+                        placement="bottom"  // "top" | "left" | "right"
+                        disabled={shapeKind !== "rect"}  // solo aplica a rectángulos
+                      />
+                    </div>
+                  )}
+                  {shapeKind !== "line" && (
+                    <div>
+                      <Label>Relleno</Label>
+                      <div className="relative flex items-center gap-2">
+                        <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeHasFill ? shapeFill : ""}</span>
+                        <FillPicker
+                          label="Relleno"
+                          value={shapeFill}
+                          onChange={setShapeFill}
+                          hasFill={shapeHasFill}
+                          onHasFillChange={setShapeHasFill}
+                          placement="bottom"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="w-14 sm:w-auto">
+                    <Label>Borde</Label>
+                    <div className="relative flex items-center gap-2">
+                      <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStroke}</span>
+                      <FillPicker
+                        label="Borde"
+                        value={shapeStroke}
+                        onChange={setShapeStroke}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="w-14 sm:w-auto">
+                    <Label>Grosor</Label>
+                    <div className="relative flex items-center gap-2">
+                      <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStrokeWidth}px</span>
+                      <StrokeWidth
+                        value={shapeStrokeWidth}
+                        onChange={setShapeStrokeWidth}
+                        min={0}
+                        max={64}
+                        step={1}
+                        placement="bottom"   // "top" | "left" | "right"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div className="ml-auto">
+                <Label>&nbsp;</Label>
+                <div className="flex items-center gap-2">
+                  <Drawer.Root direction="right" open={openDrawer} onOpenChange={setOpenDrawer}>
+                    <Drawer.Trigger className="w-14 h-10 rounded-lg border shadow-sm p-0 flex items-center justify-center hover:shadow focus:outline-none focus:ring-2 focus:ring-neutral-600 bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50 ">
+                      <LayerIcon className="inline size-6" />
+                    </Drawer.Trigger>
+                    <Drawer.Portal>
+                      <Drawer.Content
+                        className="right-2 top-2 bottom-2 fixed z-10 outline-none w-[310px] flex"
+                        style={{ '--initial-transform': 'calc(100% + 8px)' } as React.CSSProperties}
+                      >
+                        <div className="bg-zinc-50 h-full w-full grow p-5 flex flex-col rounded-[16px]">
+                          <div className="flex flex-col h-full max-w-md mx-auto">
+                            <Drawer.Title className="font-medium mb-2 text-zinc-900">
+                              Capas y elementos del lienzo
+                            </Drawer.Title>
+                            <Drawer.Description className="text-zinc-600 mb-2">
+                              Aquí puedes ver y gestionar todos los elementos del lienzo.
+                            </Drawer.Description>
+                            <ul className="flex-1 overflow-y-auto">
+                              {strokes.length === 0 && (
+                                <li className="text-sm text-zinc-500 italic">No hay elementos</li>
+                              )}
+                              {strokes.slice().sort((a,b)=>b.z - a.z).map(s => (
+                                <li key={s.id} className={`flex items-center justify-between mb-1 p-2 rounded hover:bg-zinc-100 ${selectedIds.includes(s.id) ? 'bg-zinc-200' : ''}`}>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedIds.includes(s.id)}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setSelectedIds(prev => {
+                                          if (checked) {
+                                            return [...prev, s.id];
+                                          } else {
+                                            return prev.filter(id => id !== s.id);
+                                          }
+                                        });
+                                      }}
+                                    />
+                                    <span className="text-sm">
+                                      {s.type === "text" && (
+                                        <>
+                                          <TextIcon className="inline size-4 mr-1" />
+                                          {s.text.split("\n")[0].slice(0,20) || "<vacio>"}
+                                        </>
+                                      )}
+                                      {s.type === "pen" && (
+                                        <>
+                                          <PaintBrushIcon className="inline size-4 mr-1" />
+                                          Dibujo
+                                        </>
+                                      )}
+                                      {s.type === "eraser" && (
+                                        <>
+                                          <ErraserIcon className="inline size-4 mr-1" />
+                                          Goma
+                                        </>
+                                      )}
+                                      {s.type === "svg" && (
+                                        <>
+                                        <FileSVGIcon className="inline size-4 mr-1" />
+                                          SVG
+                                        </>
+                                      )}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      onClick={() => {
+                                        setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, visible: !(st.visible ?? true) } : st));
+                                      }}
+                                      title={s.visible === false ? "Mostrar" : "Ocultar"}
+                                    >
+                                      {s.visible === false
+                                        ? <EyeClosedIcon className="inline size-5 text-zinc-400" />
+                                        : <EyeOpenIcon className="inline size-5 text-zinc-700" />
+                                      }
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setStrokes(prev => prev.map(st => st.id === s.id ? { ...st, locked: !(st.locked ?? false) } : st));
+                                      }}
+                                      title={s.locked ? "Desbloquear" : "Bloquear"}
+                                    >
+                                      {s.locked
+                                        ? <LockClosedIcon className="inline size-5 text-zinc-400" />
+                                        : <LockOpenIcon className="inline size-5 text-zinc-700" />
+                                      }
+                                    </button>
+                                  </div>
+                                </li>
+                              ))}
+                              {/* <li>
+                                <pre className="col-span-full">{ JSON.stringify(strokes, null, ' ')}</pre>
+                              </li> */}
+                            </ul>
+                          </div>
+                        </div>
+                      </Drawer.Content>
+                      <Drawer.Overlay className="fixed inset-0 bg-black/40" />
+                    </Drawer.Portal>
+                  </Drawer.Root>
+
+                  <IconButton
+                    title="Eliminar ultima capa"
+                    ariaLabel="Eliminar ultima capa"
+                    onClick={undo}
+                  >
+                    <FlipBackwardsIcon className="inline size-6" />
+                  </IconButton>
+                  <span className="w-px h-full bg-gray-400">&nbsp;</span>
+                  <IconButton
+                    title="Descargar SVG"
+                    ariaLabel="Descargar SVG"
+                    className="w-20"
+                    onClick={() => exportSVG()}
+                  >
+                    <span className="text-sm">SVG</span>
+                    <DownloadIcon className="inline size-6" />
+                  </IconButton>
+                  {/* <button
+                    onClick={() => exportSVG({ eraseBackgroundToo: true })}
+                    className="px-2 py-1 rounded bg-neutral-700 text-white hover:bg-neutral-600 disabled:opacity-50"
+                    title="La goma también recorta el fondo"
+                  >
+                    SVG (borra fondo)
+                  </button> */}
+                </div>
               </div>
             </div>
           </div>
