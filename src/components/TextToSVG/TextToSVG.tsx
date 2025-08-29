@@ -233,8 +233,8 @@ export default function TextToSVG() {
     },
   ];
 
-  const isSelectedType = (types: Omit<StrokeType, 'select'>[]) =>
-      strokes.find((s) => types.includes(s.type) && selectedIds.includes(s.id)) || !selectedIds.length && types.includes(tool);
+  const isSelectedType = (types: Omit<StrokeType, 'svg'>[]) =>
+      tool === "select" && strokes.find((s) => types.includes(s.type) && selectedIds.includes(s.id))
 
   // ==== Cambio de fuente “actual” (para nuevos textos) ====
   async function handleFontChange(family: string, opts?: { applyToSelection?: boolean }) {
@@ -1688,7 +1688,7 @@ export default function TextToSVG() {
             )}
             <div className="flex w-full snap-x snap-mandatory [&>*]:snap-center overflow-x-scroll no-scrollbar items-center gap-1 pb-2" ref={toolsRef}>
 
-              { isSelectedType(["text"]) && (
+              { (tool === "text" || isSelectedType(["text"])) && (
                 <>
                   <div className="min-w-32 sm:w-xs">
                     <Label>Fuente</Label>
@@ -1735,93 +1735,38 @@ export default function TextToSVG() {
                 </>
               )}
 
-              { isSelectedType(["pen", "eraser"]) && (
-                <>
-                  <div className="w-14 sm:w-auto">
-                    <Label>Color</Label>
-                    <div className="relative flex items-center gap-2">
-                      <FillPicker
-                        label="Pencil Color"
-                        value={penColor}
-                        onChange={(v) => updateSelectedPatch(v, setPenColor, { 
-                          types: ["pen"],
-                          patch: (_s, v) => ({ color: v }),
-                        })}
-                        placement="bottom-right"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label>Pencil Width</Label>
-                    <BrushSizeSelect
-                      value={penSize}
-                      color={penColor}
-                      onChange={(v) => updateSelectedPatch(v, setPenSize, { 
+              { (tool === "pen" || isSelectedType(["pen"])) && (
+                <div className="w-14 sm:w-auto">
+                  <Label>Color</Label>
+                  <div className="relative flex items-center gap-2">
+                    <FillPicker
+                      label="Pencil Color"
+                      value={penColor}
+                      onChange={(v) => updateSelectedPatch(v, setPenColor, { 
                         types: ["pen"],
-                        patch: (_s, v) => ({ size: v }),
+                        patch: (_s, v) => ({ color: v }),
                       })}
-                      className="w-44"
+                      placement="bottom-right"
                     />
                   </div>
-                </>
-              )}
-
-              { tool == "select" && (
-                <div>
-                  <Label>Herramientas de selección</Label>
-                  <div className="flex items-center gap-2 h-11">
-                    <IconButton
-                      title="Traer al frente"
-                      ariaLabel="Traer al frente"
-                      onClick={() => bringToFront(selectedIds)}
-                      disabled={!selectedIds.length}
-                    >
-                      <LayerUpIcon className="size-6" />
-                    </IconButton>
-
-                    <IconButton
-                      title="Enviar al fondo"
-                      ariaLabel="Enviar al fondo"
-                      onClick={() => sendToBack(selectedIds)}
-                      disabled={!selectedIds.length}
-                    >
-                      <LayerDownIcon className="size-6" />
-                    </IconButton>
-
-                    <IconButton
-                      title="Subir una capa"
-                      ariaLabel="Subir una capa"
-                      onClick={() => bringForward(selectedIds)}
-                      disabled={!selectedIds.length}
-                    >
-                      <SortAmountUpIcon className="size-6" />
-                    </IconButton>
-
-                    <IconButton
-                      title="Bajar una capa"
-                      ariaLabel="Bajar una capa"
-                      onClick={() => sendBackward(selectedIds)}
-                      disabled={!selectedIds.length}
-                    >
-                      <SortAmountDownIcon className="size-6" />
-                    </IconButton>
-
-                    <IconButton
-                      title="Eliminar"
-                      ariaLabel="Eliminar"
-                      variant="danger"
-                      onClick={deleteSelected}
-                      disabled={!selectedIds.length}
-                    >
-                      <TrashIcon className="size-6" />
-                    </IconButton>
-                  </div>
                 </div>
-
+              )}
+              { (tool == "eraser" || isSelectedType(["pen", "eraser"]) ) && (
+                <div>
+                  <Label>Pencil Width</Label>
+                  <BrushSizeSelect
+                    value={penSize}
+                    color={penColor}
+                    onChange={(v) => updateSelectedPatch(v, setPenSize, { 
+                      types: ["pen"],
+                      patch: (_s, v) => ({ size: v }),
+                    })}
+                    className="w-44"
+                  />
+                </div>
               )}
 
-              { isSelectedType(["shape"]) && (
+              { (tool == "shape" || isSelectedType(["shape"])) && (
                 <>
                   <div className="min-w-32 sm:w-xs">
                     <Label>Tipo</Label>
@@ -1892,7 +1837,62 @@ export default function TextToSVG() {
                       />
                     </div>
                   </div>
+                  <span className="w-px h-full bg-gray-400">&nbsp;</span>
                 </>
+              )}
+
+              { tool == "select" && (
+                <div>
+                  <Label>Herramientas de selección</Label>
+                  <div className="flex items-center gap-2 h-11">
+                    <IconButton
+                      title="Traer al frente"
+                      ariaLabel="Traer al frente"
+                      onClick={() => bringToFront(selectedIds)}
+                      disabled={!selectedIds.length}
+                    >
+                      <LayerUpIcon className="size-6" />
+                    </IconButton>
+
+                    <IconButton
+                      title="Enviar al fondo"
+                      ariaLabel="Enviar al fondo"
+                      onClick={() => sendToBack(selectedIds)}
+                      disabled={!selectedIds.length}
+                    >
+                      <LayerDownIcon className="size-6" />
+                    </IconButton>
+
+                    <IconButton
+                      title="Subir una capa"
+                      ariaLabel="Subir una capa"
+                      onClick={() => bringForward(selectedIds)}
+                      disabled={!selectedIds.length}
+                    >
+                      <SortAmountUpIcon className="size-6" />
+                    </IconButton>
+
+                    <IconButton
+                      title="Bajar una capa"
+                      ariaLabel="Bajar una capa"
+                      onClick={() => sendBackward(selectedIds)}
+                      disabled={!selectedIds.length}
+                    >
+                      <SortAmountDownIcon className="size-6" />
+                    </IconButton>
+
+                    <IconButton
+                      title="Eliminar"
+                      ariaLabel="Eliminar"
+                      variant="danger"
+                      onClick={deleteSelected}
+                      disabled={!selectedIds.length}
+                    >
+                      <TrashIcon className="size-6" />
+                    </IconButton>
+                  </div>
+                </div>
+
               )}
 
               <div className="ml-auto">
