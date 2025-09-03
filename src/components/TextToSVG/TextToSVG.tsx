@@ -609,7 +609,7 @@ export default function TextToSVG() {
 
 
   // ==== Bounds aproximados ====
-  function getStrokeBounds(s: Stroke): { x: number; y: number; w: number; h: number } | null {
+  function getStrokeBounds(s: Stroke): { x: number; y: number; w: number; h: number } | null | undefined {
     if (s.type === "pen" || s.type === "eraser") {
       if (!s.points.length) return null;
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;

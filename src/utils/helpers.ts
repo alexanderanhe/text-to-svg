@@ -1,5 +1,5 @@
 import type { Font } from "opentype.js";
-import type { Doc, Stroke, TextStroke } from "../types/strokes";
+import type { Stroke, TextStroke } from "../types/strokes";
 
 export function getMaxZ(arr: Stroke[]) {
   return arr.reduce((m, s) => Math.max(m, s.z), 0);
