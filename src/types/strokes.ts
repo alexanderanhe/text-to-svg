@@ -32,10 +32,17 @@ export type TextStroke = Base & {
   fontFamily: string;
   fill: string;
   lineHeight: number;
+  letterSpacing?: number;      
   x: number; y: number;
   size: number;
   rotation: number;
   align: "left" | "center" | "right";
+  outline?: {
+    color: string;           // p.ej. "#000000"
+    width: number;           // px; 0 = sin borde
+    join?: "miter" | "round" | "bevel";
+    miterLimit?: number;     // p.ej. 4
+  };
 };
 
 export type SvgStroke = Base & {
@@ -65,3 +72,13 @@ export type Stroke = PenStroke | EraserStroke | TextStroke | SvgStroke | ShapeSt
 export type StrokeType = Stroke["type"];
 export type Handle = "nw" | "ne" | "sw" | "se";
 export type FontGoogle = [string, string];
+
+export type EmbeddedFonts = Record<string, { kind: "google" | "data"; url: string }>;
+
+export type Doc = {
+  version: 1;
+  strokes: Stroke[];
+  bg: string;
+  transparentBG: boolean;
+  embeddedFonts?: EmbeddedFonts;
+};

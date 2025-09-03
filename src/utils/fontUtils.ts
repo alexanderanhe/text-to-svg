@@ -18,6 +18,7 @@ export function ensureFont(
   family: string,
   fonts: FontGoogle[],
   fontCache: Map<string, Font>,
+  fontMeta: Map<string, { kind:"google"|"data"; url:string }>,
   pendingLoads: Set<string>,
   setStatus: (msg: string) => void,
   drawPreview: () => void
@@ -34,6 +35,7 @@ export function ensureFont(
   setStatus(`Cargando fuente: ${family}`);
   opentype.load(url).then((f) => {
     fontCache.set(family, f);
+    fontMeta.set(family, { kind: "google", url });
     pendingLoads.delete(family);
     setStatus(`Fuente lista: ${family}`);
     drawPreview();
@@ -48,6 +50,7 @@ export async function ensureFontAsync(
   family: string,
   fonts: FontGoogle[],
   fontCache: Map<string, Font>,
+  fontMeta: Map<string, { kind:"google"|"data"; url:string }>,
   pendingLoads: Set<string>
 ): Promise<Font | null> {
   const cached = fontCache.get(family);
@@ -73,6 +76,7 @@ export async function ensureFontAsync(
   try {
     const f = await opentype.load(url);
     fontCache.set(family, f);
+    fontMeta.set(family, { kind: "google", url });
     return f;
   } catch {
     return null;

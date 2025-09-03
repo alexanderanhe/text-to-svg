@@ -78,7 +78,8 @@ export function FillPicker({
   };
   const handleCommitHex = () => { const n = normalized(hex); if (n) onChange(n); else setHex(value); };
 
-  const swatchBg = (hasFill || hasFill === undefined)
+  const hasFillDefined = hasFill || hasFill === undefined;
+  const swatchBg = hasFillDefined
     ? value
     : "repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 50% / 10px 10px";
 
@@ -94,7 +95,7 @@ export function FillPicker({
         aria-expanded={open}
         onClick={() => !disabled && setOpen(o => !o)}
       >
-        {!(hasFill || hasFill === undefined) && <span className="pointer-events-none absolute block w-[2px] h-12 bg-rose-500 rotate-45" />}
+        {!hasFillDefined && <span className="pointer-events-none absolute block w-[2px] h-12 bg-rose-500 rotate-45" />}
         <span className="pointer-events-none absolute inset-1 rounded-md border border-black/10" />
       </button>
 
@@ -112,9 +113,9 @@ export function FillPicker({
               <input
                 type="color"
                 className="w-10 h-8 p-0 border border-neutral-300 rounded cursor-pointer"
-                value={hasFill ? value : "#ffffff"}
+                value={hasFillDefined ? value : "#ffffff"}
                 onChange={(e) => { if (onHasFillChange) onHasFillChange(true); onChange(e.target.value); setHex(e.target.value); }}
-                disabled={!hasFill}
+                disabled={!hasFillDefined}
                 title="Selecciona color"
               />
               <input
@@ -125,7 +126,7 @@ export function FillPicker({
                 onChange={(e)=>setHex(e.target.value)}
                 onBlur={handleCommitHex}
                 onKeyDown={(e)=>{ if(e.key==="Enter") { e.preventDefault(); handleCommitHex(); } }}
-                disabled={!hasFill}
+                disabled={!(hasFill || hasFill === undefined)}
               />
             </div>
 
