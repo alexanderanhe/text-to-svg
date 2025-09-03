@@ -187,7 +187,7 @@ export default function TextToSVG() {
   ];
 
   const isSelectedType = (types: Omit<StrokeType, 'svg'>[]) =>
-      tool === "select" && strokes.find((s) => types.includes(s.type) && selectedIds.includes(s.id))
+      tool === "select" ? strokes.find((s) => types.includes(s.type) && selectedIds.includes(s.id)) : null;
 
   // ==== Cambio de fuente “actual” (para nuevos textos) ====
   async function handleFontChange(family: string, opts?: { applyToSelection?: boolean }) {
@@ -451,17 +451,21 @@ export default function TextToSVG() {
         if (!st) continue;
         const b = getStrokeBounds(st);
         if (!b) continue;
-        // caja
-        ctx.strokeRect(b.x, b.y, b.w, b.h);
-        // handles
-        const hs = handleRects(b, dpr);
-        ctx.setLineDash([]);
-        ctx.fillStyle = "#fff";
-        ctx.strokeStyle = "#0af";
-        for (const h of Object.values(hs)) {
-          ctx.fillRect(h.x, h.y, h.w, h.h);
-          ctx.strokeRect(h.x, h.y, h.w, h.h);
-        }
+        const cx = b.x + b.w/2, cy = b.y + b.h/2;
+
+        withRotation(ctx, (st.type === "text" || st.type === "svg") ? st.rotation ?? 0 : 0, cx, cy, () => {
+          // caja
+          ctx.strokeRect(b.x, b.y, b.w, b.h);
+          // handles
+          const hs = handleRects(b, dpr);
+          ctx.setLineDash([]);
+          ctx.fillStyle = "#fff";
+          ctx.strokeStyle = "#0af";
+          for (const h of Object.values(hs)) {
+            ctx.fillRect(h.x, h.y, h.w, h.h);
+            ctx.strokeRect(h.x, h.y, h.w, h.h);
+          }
+        })
       }
       ctx.restore();
     }
@@ -551,56 +555,55 @@ export default function TextToSVG() {
     ctx.save();
     // (si más adelante agregas rotación por stroke, aplica aquí con ctx.translate/rotate)
     
-    // const b = getStrokeBounds(s); // si tu getStrokeBounds ya considera rotación, haz una variante "unrotated"
-    // const cx = b.x + b.w/2, cy = b.y + b.h/2;
+    const b = s ? getStrokeBounds(s) : null; // si tu getStrokeBounds ya considera rotación, haz una variante "unrotated"
+    if (!b) return
+    const cx = b.x + b.w/2, cy = b.y + b.h/2;
 
-    // withRotation(ctx, s.rotation||0, cx, cy, () => {
+    withRotation(ctx, s.rotation || 0, cx, cy, () => {
 
-    // });
-
-    for (const line of lines) {
-      const glyphs = f.stringToGlyphs(line);
-      const scale = s.size / unitsPerEm;
-
-      // x inicial considerando alineación con tracking
-      let x = s.x + alignShiftXLS(f, line, s.size, s.align, letterSpacing);
-      const y = baselineY;
-
-      for (let i = 0; i < glyphs.length; i++) {
-        const g = glyphs[i];
-
-        // --- STROKE debajo ---
-        if (sw > 0) {
-          const ps = g.getPath(x, y, s.size);
-          ps.fill = null;
-          ps.stroke = scol;
-          ps.strokeWidth = sw;
-          ctx.save();
-          ctx.lineJoin = join;
-          ctx.miterLimit = mlim;
-          ps.draw(ctx);
-          ctx.restore();
+      for (const line of lines) {
+        const glyphs = f.stringToGlyphs(line);
+        const scale = s.size / unitsPerEm;
+  
+        // x inicial considerando alineación con tracking
+        let x = s.x + alignShiftXLS(f, line, s.size, s.align, letterSpacing);
+        const y = baselineY;
+  
+        for (let i = 0; i < glyphs.length; i++) {
+          const g = glyphs[i];
+  
+          // --- STROKE debajo ---
+          if (sw > 0) {
+            const ps = g.getPath(x, y, s.size);
+            ps.fill = null;
+            ps.stroke = scol;
+            ps.strokeWidth = sw;
+            ctx.save();
+            ctx.lineJoin = join;
+            ctx.miterLimit = mlim;
+            ps.draw(ctx);
+            ctx.restore();
+          }
+  
+          // --- FILL encima ---
+          const pf = g.getPath(x, y, s.size);
+          pf.stroke = null;
+          pf.fill = s.fill === "none" ? null : s.fill;
+          pf.draw(ctx);
+  
+          // Avance + kerning + tracking
+          let adv = (g.advanceWidth || 0) * scale;
+          if (i < glyphs.length - 1) {
+            adv += (f.getKerningValue(g, glyphs[i + 1]) || 0) * scale;
+            adv += letterSpacing;
+          }
+          x += adv;
         }
-
-        // --- FILL encima ---
-        const pf = g.getPath(x, y, s.size);
-        pf.stroke = null;
-        pf.fill = s.fill === "none" ? null : s.fill;
-        pf.draw(ctx);
-
-        // Avance + kerning + tracking
-        let adv = (g.advanceWidth || 0) * scale;
-        if (i < glyphs.length - 1) {
-          adv += (f.getKerningValue(g, glyphs[i + 1]) || 0) * scale;
-          adv += letterSpacing;
-        }
-        x += adv;
+  
+        baselineY += s.size * s.lineHeight;
       }
+    });
 
-      baselineY += s.size * s.lineHeight;
-    }
-
-    ctx.restore();
   }
 
 
@@ -634,23 +637,47 @@ export default function TextToSVG() {
       const h = s.ih * s.scale;
       // (sin rotación para simplificar bounds; si usas rotación, calcula el AABB)
       return { x: s.x, y: s.y, w, h };
-    } else {
+    } if (s.type === "text") {
       const f = fontCacheRef.current.get(s.fontFamily);
       if (!f) return null;
-      const lines = (s.text || "").split("\n").map(l => l.length ? l : " ");
-      let y = s.y;
+
+      const lines = (s.text || "").split("\n").map(l => l || " "); // altura para líneas vacías
+      const upm   = f.unitsPerEm || 1000;
+      const ls    = s.letterSpacing ?? 0;            // ← tracking
+      const sw    = s.outline?.width ?? 0;           // ← borde (para engordar bbox)
+      const pad   = sw * 0.5;                         // ← mitad del stroke al rededor
       let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
+
+      let y = s.y;
       for (const line of lines) {
-        const x = s.x + alignShiftX(f, line, s.size, s.align);
-        const p = f.getPath(line, x, y, s.size);
-        const b = p.getBoundingBox();
-        xMin = Math.min(xMin, b.x1);
-        yMin = Math.min(yMin, b.y1);
-        xMax = Math.max(xMax, b.x2);
-        yMax = Math.max(yMax, b.y2);
+        const glyphs = f.stringToGlyphs(line);
+        const scale  = s.size / upm;
+
+        // Igual que al dibujar: usa tu alignShiftXLS con letterSpacing
+        let x = s.x + alignShiftXLS(f, line, s.size, s.align, ls);
+
+        for (let i = 0; i < glyphs.length; i++) {
+          const g = glyphs[i];
+
+          // bbox del glyph a (x,y) y tamaño s.size
+          const b = g.getPath(x, y, s.size).getBoundingBox();
+          xMin = Math.min(xMin, b.x1 - pad);
+          yMin = Math.min(yMin, b.y1 - pad);
+          xMax = Math.max(xMax, b.x2 + pad);
+          yMax = Math.max(yMax, b.y2 + pad);
+
+          // avance = advance + kerning + tracking (letterSpacing)
+          let adv = (g.advanceWidth || 0) * scale;
+          if (i < glyphs.length - 1) {
+            adv += (f.getKerningValue(g, glyphs[i + 1]) || 0) * scale;
+            adv += ls;                                  // ← tracking
+          }
+          x += adv;
+        }
         y += s.size * s.lineHeight;
       }
-      if (!isFinite(xMin)) return null;
+
+      if (!Number.isFinite(xMin)) return null;
       return { x: xMin, y: yMin, w: xMax - xMin, h: yMax - yMin };
     }
   }
@@ -1403,13 +1430,22 @@ export default function TextToSVG() {
     const w = s.iw * s.scale;
     const h = s.ih * s.scale;
 
+    const bb = getStrokeBounds(s);
+    if (!bb) return;
+    const cx = bb.x + bb.w / 2;
+    const cy = bb.y + bb.h / 2;
+
     ctx.save();
-    ctx.translate(s.x, s.y);
-    if (s.rotation) ctx.rotate(s.rotation);
-    // dibuja con el origen en (0,0)
-    if (img.complete) {
-      ctx.drawImage(img, 0, 0, w, h);
-    }
+    withRotation(ctx, s.rotation || 0, cx, cy, () => {
+      if (img.complete) {
+        ctx.drawImage(img, s.x, s.y, w, h);               // <-- dibuja en su top-left (s.x,s.y)
+      } else {
+        // placeholder opcional mientras carga
+        ctx.strokeStyle = "#ccc";                          // <-- placeholder visual
+        ctx.strokeRect(s.x, s.y, w, h);
+      }
+    })
+
     ctx.restore();
   }
 
@@ -1631,8 +1667,12 @@ export default function TextToSVG() {
 
           y += s.size * s.lineHeight;
         }
+        const deg = (s.rotation||0) * 180/Math.PI;
+        const b = getStrokeBounds(s); // usa tu lógica de bounds de texto
+        const cx = b ? b.x + b.w/2 : 0, cy = b ? b.y + b.h/2 : 0;
+        const R = `translate(${cx},${cy}) rotate(${deg}) translate(${-cx},${-cy})`;
 
-        contentEls.push(`<g${maskAttr}>${parts.join("\n")}</g>`);
+        contentEls.push(`<g${maskAttr} transform="${R}">${parts.join("\n")}</g>`);
         continue;
       }
 
@@ -1850,7 +1890,7 @@ export default function TextToSVG() {
                   <Label>Fuente</Label>
                   <KCmdKModal
                     title="Fuente (Google Fonts)"
-                    label={fontFamily || "Fuente"}
+                    label={(isSelectedType(["text"]) as TextStroke)?.fontFamily || fontFamily || "Fuente"}
                     fonts={fonts}
                     handleFontChange={(f) => { handleFontChange(f); }}
                     onUploadTTF={onUploadTTF}
@@ -1866,7 +1906,7 @@ export default function TextToSVG() {
                     className="w-full h-10 p-2 rounded-lg border border-neutral-300"
                     min={0}
                     max={30}
-                    value={letterSpacing}
+                    value={(isSelectedType(["text"]) as TextStroke)?.letterSpacing || letterSpacing}
                     onChange={(e) => updateSelectedPatch(+e.target.value || 1.2, setLetterSpacing, { 
                       types: ["text"],
                       patch: (_s, v) => ({ letterSpacing: v }),
@@ -1882,7 +1922,7 @@ export default function TextToSVG() {
                     className="w-full h-10 p-2 rounded-lg border border-neutral-300"
                     min={0.8}
                     max={3}
-                    value={lineHeight}
+                    value={(isSelectedType(["text"]) as TextStroke)?.lineHeight || lineHeight}
                     onChange={(e) => updateSelectedPatch(+e.target.value || 1.2, setLineHeight, { 
                       types: ["text"],
                       patch: (_s, v) => ({ lineHeight: v }),
@@ -1896,7 +1936,7 @@ export default function TextToSVG() {
                     <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStroke}</span>
                     <FillPicker
                       label="Color de texto"
-                      value={fill}
+                      value={(isSelectedType(["text"]) as TextStroke)?.fill || fill}
                       onChange={(v) => updateSelectedPatch(v, setFill, { 
                         types: ["text"],
                         patch: (_s, v) => ({ fill: v }),
@@ -1911,7 +1951,7 @@ export default function TextToSVG() {
                     <div className="relative flex items-center gap-2">
                       <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{fontOutlineWidth}px</span>
                       <StrokeWidth
-                        value={fontOutlineWidth}
+                        value={(isSelectedType(["text"]) as TextStroke)?.outline?.width || fontOutlineWidth}
                         onChange={(v) => updateSelectedPatch(v, setFontOutlineWidth, { 
                           types: ["text"],
                           patch: (s, width) => {
@@ -1936,7 +1976,7 @@ export default function TextToSVG() {
                       <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{fontOutlineColor}</span>
                       <FillPicker
                         label="Color de borde"
-                        value={fontOutlineColor}
+                        value={(isSelectedType(["text"]) as TextStroke)?.outline?.color || fontOutlineColor}
                         onChange={(v) => updateSelectedPatch(v, setFontOutlineColor, { 
                           types: ["text"],
                           patch: (s, color) => {
@@ -1957,7 +1997,7 @@ export default function TextToSVG() {
               </>
             )}
 
-            {isSelectedType(["text"]) && (
+            {isSelectedType(["text", "svg"]) && (
               <div className="min-w-14 sm:w-auto">
                 <Label>Rotation</Label>
                 <input
@@ -1966,8 +2006,8 @@ export default function TextToSVG() {
                   className="w-full p-2 rounded-lg border border-neutral-300"
                   min={-180}
                   max={180}
-                  value={rotation}
-                  onChange={(e) => updateSelectedPatch(+e.target.value || 1.2, setRotation, { 
+                  value={(isSelectedType(["text", "svg"]) as TextStroke | SvgStroke)?.rotation || rotation}
+                  onChange={(e) => updateSelectedPatch(+e.target.value || 0, setRotation, { 
                     types: ["text"],
                     patch: (_s, v) => ({ rotation: degToRad(v) }),
                   })}
@@ -1981,7 +2021,7 @@ export default function TextToSVG() {
                 <div className="relative flex items-center gap-2">
                   <FillPicker
                     label="Pencil Color"
-                    value={penColor}
+                    value={(isSelectedType(["pen"]) as PenStroke)?.color || penColor}
                     onChange={(v) => updateSelectedPatch(v, setPenColor, { 
                       types: ["pen"],
                       patch: (_s, v) => ({ color: v }),
@@ -1995,7 +2035,7 @@ export default function TextToSVG() {
               <div>
                 <Label>Pencil Width</Label>
                 <BrushSizeSelect
-                  value={penSize}
+                  value={(isSelectedType(["pen", "eraser"]) as PenStroke | EraserStroke)?.size || penSize}
                   color={penColor}
                   onChange={(v) => updateSelectedPatch(v, setPenSize, { 
                     types: ["pen"],
@@ -2012,7 +2052,7 @@ export default function TextToSVG() {
                   <Label>Tipo</Label>
                   <select
                     className="w-full p-2 rounded-lg border border-neutral-300"
-                    value={shapeKind}
+                    value={(isSelectedType(["shape"]) as ShapeStroke)?.kind || shapeKind}
                     onChange={e => setShapeKind(e.target.value as ShapeKind)}
                   >
                     <option value="rect">Rectángulo</option>
@@ -2024,7 +2064,7 @@ export default function TextToSVG() {
                   <div className="w-14">
                     <Label>Radio</Label>
                     <Radius
-                      value={shapeRadius}
+                      value={(isSelectedType(["shape"]) as ShapeStroke)?.rx || shapeRadius}
                       onChange={(v) => updateSelectedPatch(v, setShapeRadius, { 
                         types: ["shape"],
                         patch: (_s, v) => ({ rx: v }),
@@ -2044,7 +2084,7 @@ export default function TextToSVG() {
                       <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeHasFill ? shapeFill : ""}</span>
                       <FillPicker
                         label="Relleno"
-                        value={shapeFill}
+                        value={(isSelectedType(["shape"]) as ShapeStroke)?.fill || shapeFill}
                         onChange={(v) => updateSelectedPatch(v, setShapeFill, { 
                           types: ["shape"],
                           patch: (_s, v) => ({ fill: v }),
@@ -2063,7 +2103,7 @@ export default function TextToSVG() {
                     <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStroke}</span>
                     <FillPicker
                       label="Borde"
-                      value={shapeStroke}
+                      value={(isSelectedType(["shape"]) as ShapeStroke)?.stroke || shapeStroke}
                       onChange={(v) => updateSelectedPatch(v, setShapeStroke, { 
                         types: ["shape"],
                         patch: (_s, v) => ({ stroke: v }),
@@ -2077,7 +2117,7 @@ export default function TextToSVG() {
                   <div className="relative flex items-center gap-2">
                     <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStrokeWidth}px</span>
                     <StrokeWidth
-                      value={shapeStrokeWidth}
+                      value={(isSelectedType(["shape"]) as ShapeStroke)?.strokeWidth || shapeStrokeWidth}
                       onChange={(v) => updateSelectedPatch(v, setShapeStrokeWidth, { 
                         types: ["shape"],
                         patch: (_s, v) => ({ strokeWidth: v }),
