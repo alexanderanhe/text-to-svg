@@ -11,7 +11,7 @@ import { ensureFont, ensureFontAsync, listFonts } from "../../utils/fontUtils";
 import { isFontFile, isSvgFile } from "../../utils/fileUtils";
 import { extractSvgInner, parseSVGMeta } from "../../utils/svgUtils";
 import { getCanvasPos, withRotation } from "../../utils/canvasUtils";
-import { alignShiftX, alignShiftXLS, boundsWithFont, degToRad, fileToDataURL, getMaxZ, normalizeZ } from "../../utils/helpers";
+import { alignShiftX, alignShiftXLS, boundsWithFont, degToRad, fileToDataURL, getMaxZ, normalizeZ, pointInRotatedRect, radToDeg, unrotatePoint } from "../../utils/helpers";
 import { FillPicker } from "../FillPicker";
 import { StrokeWidth } from "../StrokeWidth";
 import { Radius } from "../Radius";
@@ -104,6 +104,8 @@ export default function TextToSVG() {
     startPt: Pt;                  // donde empezó el drag
     startBBox: { x:number; y:number; w:number; h:number };
     startStroke: Stroke;          // snapshot
+    center: {x: number; y: number};
+    angle: number;
   }>(null);
 
   // ==== Cargar lista de fuentes ====
@@ -747,6 +749,17 @@ export default function TextToSVG() {
     return null;
   }
 
+  function isHitSelect(px:number, py:number, st: Stroke){
+    const b = getStrokeBounds(st);
+    if (!b) return false;
+
+    const angle = (st.type === "text" || st.type === "svg") ? (st.rotation || 0) : 0;
+    const cx = b.x + b.w/2, cy = b.y + b.h/2;
+    const HIT_PAD = 4; // margen de clic tolerante
+
+    return pointInRotatedRect(px, py, b, angle, cx, cy, HIT_PAD);
+  }
+
   // ==== Interacción ====
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = e.currentTarget;
@@ -906,31 +919,45 @@ export default function TextToSVG() {
 
     // 3) SELECT: primero mira si estás sobre UN HANDLE del elemento ya seleccionado
     if (tool === "select") {
-      const selId = selectedIds[0] ?? null;
-      if (selId) {
-        const s = strokes.find(st => st.id === selId);
-        const b = s ? getStrokeBounds(s) : null;
-        if (s && b) {
+    const selId = selectedIds[0] ?? null;
+    if (selId) {
+      const s = strokes.find(st => st.id === selId);
+      if (s) {
+        const b = (s.type === "svg")
+            ? { x: s.x, y: s.y, w: s.iw * s.scale, h: s.ih * s.scale }
+            : getStrokeBounds(s);
+        if (b) {
+          const angle = (s.type === "text" || s.type === "svg") ? (s.rotation ?? 0) : 0;
+          const cx = b.x + b.w/2, cy = b.y + b.h/2;
+
+          // 2.2) des-rotar el punto del click si hace falta
+          const pLocal = angle ? unrotatePoint(p.x, p.y, cx, cy, angle) : p;
+
+          // 2.3) handles calculados en coords "no rotadas"
           const dpr = window.devicePixelRatio || 1;
           const hs = handleRects(b, dpr);
+
           const hitHandle =
-            pointInRect(p, hs.nw) ? "nw" :
-            pointInRect(p, hs.ne) ? "ne" :
-            pointInRect(p, hs.sw) ? "sw" :
-            pointInRect(p, hs.se) ? "se" : null;
+            pointInRect(pLocal, hs.nw) ? "nw" :
+            pointInRect(pLocal, hs.ne) ? "ne" :
+            pointInRect(pLocal, hs.sw) ? "sw" :
+            pointInRect(pLocal, hs.se) ? "se" : null;
+
           if (hitHandle) {
-            // ← SOLO si realmente tocaste un handle, entra a resize
             resizingRef.current = {
               id: s.id,
               handle: hitHandle,
-              startPt: p,
+              startPt: pLocal,
               startBBox: b,
               startStroke: JSON.parse(JSON.stringify(s)) as Stroke,
+              center: { x: cx, y: cy },
+              angle,
             };
-            return; // ¡ojo! salimos aquí SOLO si era un handle
+            return;
           }
         }
       }
+    }
 
       // 4) Si no tocaste handle: hit-test normal para seleccionar y comenzar drag
       const id = hitTest(p);
@@ -1933,7 +1960,7 @@ export default function TextToSVG() {
                 <div className="min-w-14 sm:w-auto">
                   <Label>Color</Label>
                   <div className="relative flex items-center gap-2">
-                    <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStroke}</span>
+                    <span className="pointer-events-none select-none grid absolute inset-0 pb-1 items-end text-xs font-bold text-neutral-500 z-[1]" aria-hidden="true">{shapeStroke}</span>
                     <FillPicker
                       label="Color de texto"
                       value={(isSelectedType(["text"]) as TextStroke)?.fill || fill}
@@ -1949,7 +1976,7 @@ export default function TextToSVG() {
                   <Label>Borde</Label>
                   <div className="flex gap-1">
                     <div className="relative flex items-center gap-2">
-                      <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{fontOutlineWidth}px</span>
+                      <span className="pointer-events-none select-none grid absolute inset-0 pb-1 items-end text-xs font-bold text-neutral-500 z-[1]">{fontOutlineWidth}px</span>
                       <StrokeWidth
                         value={(isSelectedType(["text"]) as TextStroke)?.outline?.width || fontOutlineWidth}
                         onChange={(v) => updateSelectedPatch(v, setFontOutlineWidth, { 
@@ -1973,7 +2000,7 @@ export default function TextToSVG() {
                     </div>
 
                     <div className="relative flex items-center gap-2">
-                      <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{fontOutlineColor}</span>
+                      <span className="pointer-events-none select-none grid absolute inset-0 pb-1 items-end text-xs font-bold text-neutral-500 z-[1]">{fontOutlineColor}</span>
                       <FillPicker
                         label="Color de borde"
                         value={(isSelectedType(["text"]) as TextStroke)?.outline?.color || fontOutlineColor}
@@ -2006,7 +2033,7 @@ export default function TextToSVG() {
                   className="w-full p-2 rounded-lg border border-neutral-300"
                   min={-180}
                   max={180}
-                  value={(isSelectedType(["text", "svg"]) as TextStroke | SvgStroke)?.rotation || rotation}
+                  value={radToDeg((isSelectedType(["text", "svg"]) as TextStroke | SvgStroke)?.rotation) || rotation}
                   onChange={(e) => updateSelectedPatch(+e.target.value || 0, setRotation, { 
                     types: ["text"],
                     patch: (_s, v) => ({ rotation: degToRad(v) }),
@@ -2081,7 +2108,7 @@ export default function TextToSVG() {
                   <div>
                     <Label>Relleno</Label>
                     <div className="relative flex items-center gap-2">
-                      <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeHasFill ? shapeFill : ""}</span>
+                      <span className="pointer-events-none select-none grid absolute inset-0 pb-1 items-end text-xs font-bold text-neutral-500 z-[1]">{shapeHasFill ? shapeFill : ""}</span>
                       <FillPicker
                         label="Relleno"
                         value={(isSelectedType(["shape"]) as ShapeStroke)?.fill || shapeFill}
@@ -2100,7 +2127,7 @@ export default function TextToSVG() {
                 <div className="w-14 sm:w-auto">
                   <Label>Borde</Label>
                   <div className="relative flex items-center gap-2">
-                    <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStroke}</span>
+                    <span className="pointer-events-none select-none grid absolute inset-0 pb-1 items-end text-xs font-bold text-neutral-500 z-[1]">{shapeStroke}</span>
                     <FillPicker
                       label="Borde"
                       value={(isSelectedType(["shape"]) as ShapeStroke)?.stroke || shapeStroke}
@@ -2115,7 +2142,7 @@ export default function TextToSVG() {
                 <div className="w-14 sm:w-auto">
                   <Label>Grosor</Label>
                   <div className="relative flex items-center gap-2">
-                    <span className="grid absolute inset-0 pb-1 items-end text-xs text-neutral-500">{shapeStrokeWidth}px</span>
+                    <span className="pointer-events-none select-none grid absolute inset-0 pb-1 items-end text-xs font-bold text-neutral-500 z-[1]">{shapeStrokeWidth}px</span>
                     <StrokeWidth
                       value={(isSelectedType(["shape"]) as ShapeStroke)?.strokeWidth || shapeStrokeWidth}
                       onChange={(v) => updateSelectedPatch(v, setShapeStrokeWidth, { 

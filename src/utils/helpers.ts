@@ -71,3 +71,29 @@ export function alignShiftXLS(font: Font, text: string, size: number, align: "le
 }
 
 export const degToRad = (d:number)=> d*Math.PI/180;
+
+export const radToDeg = (r: number) => r*180/Math.PI;
+
+type Rect = { x:number; y:number; w:number; h:number };
+
+/** Devuelve true si (px,py) cae dentro de la OBB definida por (b, angle) */
+export function pointInRotatedRect(px:number, py:number, b:Rect, angle:number, cx:number, cy:number, pad=0){
+  if (!angle) {
+    return px >= b.x - pad && px <= b.x + b.w + pad &&
+           py >= b.y - pad && py <= b.y + b.h + pad;
+  }
+  // Inversa: rotar el punto -angle alrededor del centro
+  const c = Math.cos(-angle), s = Math.sin(-angle);
+  const dx = px - cx, dy = py - cy;
+  const lx = cx + dx*c - dy*s;       // punto des-rotado en coords mundo
+  const ly = cy + dx*s + dy*c;
+  return lx >= b.x - pad && lx <= b.x + b.w + pad &&
+         ly >= b.y - pad && ly <= b.y + b.h + pad;
+}
+
+export function unrotatePoint(px:number, py:number, cx:number, cy:number, angle:number){
+  // rota (px,py) por -angle alrededor de (cx,cy)
+  const c = Math.cos(-angle), s = Math.sin(-angle);
+  const dx = px - cx, dy = py - cy;
+  return { x: cx + dx*c - dy*s, y: cy + dx*s + dy*c };
+}
