@@ -11,7 +11,7 @@ import { ensureFont, ensureFontAsync, listFonts } from "../../utils/fontUtils";
 import { isFontFile, isSvgFile } from "../../utils/fileUtils";
 import { extractSvgInner, parseSVGMeta } from "../../utils/svgUtils";
 import { getCanvasPos, withRotation } from "../../utils/canvasUtils";
-import { alignShiftX, alignShiftXLS, boundsWithFont, degToRad, fileToDataURL, getMaxZ, normalizeZ, radToDeg, unrotatePoint } from "../../utils/helpers";
+import { alignShiftXLS, boundsWithFont, degToRad, fileToDataURL, getMaxZ, normalizeZ, radToDeg, unrotatePoint } from "../../utils/helpers";
 import { FillPicker } from "../FillPicker";
 import { StrokeWidth } from "../StrokeWidth";
 import { Radius } from "../Radius";
@@ -20,6 +20,7 @@ import ToolsContainer from "../ToolsContainer";
 import { getPolyBounds, getPolyRawBounds, isNear } from "../../utils/polygonUtils";
 import { translateStroke } from "./strokeTransforms";
 import { drawPoly, drawPolySelectionOverlay, hitPoly } from "./polyStroke";
+import { RotationPickerPopover } from "../RotationPickerPopover";
 
 const AA_MARGIN = 1; // 1px de seguridad contra antialias/decimales
 
@@ -75,6 +76,7 @@ export default function TextToSVG() {
   const polyDraftRef = useRef<{ id: string; committed: number } | null>(null);
   // <-- tolerancia para cerrar tocando el primer punto
   const CLOSE_TOL = 8;
+  const DRAG_THRESHOLD = 2;
 
   // util
   const isBreak = (p: Pt) => !Number.isFinite(p.x) || !Number.isFinite(p.y);
@@ -84,7 +86,8 @@ export default function TextToSVG() {
   // Documento
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const draggingRef = useRef<{ id: string; last: Pt } | null>(null);
+  type DragState = { id: string; last: Pt; origin: Pt; hasMoved: boolean };
+  const draggingRef = useRef<DragState | null>(null);
   const drawingRef = useRef<PenStroke | EraserStroke | null>(null);
   const svgImgCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
@@ -665,7 +668,7 @@ export default function TextToSVG() {
       const upm   = f.unitsPerEm || 1000;
       const ls    = s.letterSpacing ?? 0;            // ← tracking
       const sw    = s.outline?.width ?? 0;           // ← borde (para engordar bbox)
-      const pad   = sw * 0.5;                         // ← mitad del stroke al rededor
+      const pad   = (sw * 0.5) + AA_MARGIN;          // ← mitad del stroke + margen AA
       let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
 
       let y = s.y;
@@ -714,14 +717,44 @@ export default function TextToSVG() {
         const f = fontCacheRef.current.get(s.fontFamily);
         if (!f) continue;
         const lines = s.text.split("\n").map(l => l.length ? l : " ");
+        const letterSpacing = s.letterSpacing ?? 0;
+        const outlineWidth = s.outline?.width ?? 0;
+        const outlineJoin = (s.outline?.join ?? "round") as CanvasLineJoin;
+        const outlineMiter = s.outline?.miterLimit ?? 4;
+        const prevWidth = ctx.lineWidth;
+        const prevJoin = ctx.lineJoin;
+        const prevMiter = ctx.miterLimit;
+
         let y = s.y;
         for (const line of lines) {
-          const x = s.x + alignShiftX(f, line, s.size, s.align);
-          const p = f.getPath(line, x, y, s.size);
-          const path2d = new Path2D(p.toPathData(2));
-          if (ctx.isPointInPath(path2d, pt.x, pt.y)) return s.id;
+          const x = s.x + alignShiftXLS(f, line, s.size, s.align, letterSpacing);
+          const path = new Path2D(f.getPath(line, x, y, s.size).toPathData(2));
+
+          if (s.fill !== "none" && ctx.isPointInPath(path, pt.x, pt.y)) {
+            ctx.lineWidth = prevWidth;
+            ctx.lineJoin = prevJoin;
+            ctx.miterLimit = prevMiter;
+            return s.id;
+          }
+
+          if (outlineWidth > 0) {
+            ctx.lineWidth = outlineWidth;
+            ctx.lineJoin = outlineJoin;
+            ctx.miterLimit = outlineMiter;
+            if (ctx.isPointInStroke(path, pt.x, pt.y)) {
+              ctx.lineWidth = prevWidth;
+              ctx.lineJoin = prevJoin;
+              ctx.miterLimit = prevMiter;
+              return s.id;
+            }
+          }
+
           y += s.size * s.lineHeight;
         }
+
+        ctx.lineWidth = prevWidth;
+        ctx.lineJoin = prevJoin;
+        ctx.miterLimit = prevMiter;
       } else if (s.type === "shape") {
         const c = document.createElement("canvas");
         const ctx = c.getContext("2d")!;
@@ -1057,7 +1090,7 @@ export default function TextToSVG() {
       const id = hitTest(p);
       if (id) {
         setSelectedIds([id]);
-        draggingRef.current = { id, last: p };
+        draggingRef.current = { id, last: p, origin: p, hasMoved: false };
       } else {
         setSelectedIds([]);
       }
@@ -1224,6 +1257,17 @@ export default function TextToSVG() {
     if (!d) return;
 
     const p = getCanvasPos(canvas, e);
+
+    if (!d.hasMoved) {
+      const totalDx = p.x - d.origin.x;
+      const totalDy = p.y - d.origin.y;
+      if (Math.hypot(totalDx, totalDy) < DRAG_THRESHOLD) {
+        return;
+      }
+      d.hasMoved = true;
+      d.last = d.origin;
+    }
+
     const dx = p.x - d.last.x;
     const dy = p.y - d.last.y;
     if (dx === 0 && dy === 0) return;
@@ -1233,7 +1277,7 @@ export default function TextToSVG() {
       return translateStroke(s, dx, dy);
     }));
 
-    draggingRef.current = { ...d, last: p };
+    d.last = p;
   }
 
 
@@ -2183,19 +2227,28 @@ export default function TextToSVG() {
             )}
 
             {isSelectedType(["text", "svg"]) && (
-              <div className="min-w-14 sm:w-auto">
-                <Label>Rotation</Label>
-                <input
-                  type="number"
-                  step="1"
-                  className="w-full p-2 rounded-lg border border-neutral-300"
+              <div className="min-w-20 sm:w-auto">
+                <Label>Rotación</Label>
+                <RotationPickerPopover
+                  value={
+                    radToDeg((isSelectedType(["text", "svg"]) as TextStroke | PolyStroke)?.rotation
+                    ?? rotation)
+                  }
+                  onChange={(deg) =>
+                    updateSelectedPatch(deg, setRotation, {
+                      types: ["text", "svg"],
+                      patch: (_s, v) => ({ rotation: degToRad(v) }),
+                    })
+                  }
                   min={-180}
                   max={180}
-                  value={radToDeg((isSelectedType(["text", "svg"]) as TextStroke | SvgStroke)?.rotation) || rotation}
-                  onChange={(e) => updateSelectedPatch(+e.target.value || 0, setRotation, { 
-                    types: ["text"],
-                    patch: (_s, v) => ({ rotation: degToRad(v) }),
-                  })}
+                  step={1}
+                  presets={[-90, -45, 0, 45, 90]}
+                  snap={null}
+                  decimals={0}
+                  preferred="bottom"
+                  align="start"
+                  ariaLabel="Rotación"
                 />
               </div>
             )}

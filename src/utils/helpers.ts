@@ -23,16 +23,36 @@ export function boundsWithFont(ts: TextStroke, f: Font) {
   const lines = (ts.text || "").split("\n").map(l => l || " ");
   let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
   let y = ts.y;
+  const letterSpacing = ts.letterSpacing ?? 0;
+  const outlineWidth = ts.outline?.width ?? 0;
+  const pad = outlineWidth / 2;
+
   for (const line of lines) {
-    const x = ts.x + alignShiftX(f, line, ts.size, ts.align);
-    const p = f.getPath(line, x, y, ts.size);
-    const b = p.getBoundingBox();
-    xMin = Math.min(xMin, b.x1);
-    yMin = Math.min(yMin, b.y1);
-    xMax = Math.max(xMax, b.x2);
-    yMax = Math.max(yMax, b.y2);
+    const glyphs = f.stringToGlyphs(line);
+    const unitsPerEm = f.unitsPerEm || 1000;
+    const scale = ts.size / unitsPerEm;
+    let x = ts.x + alignShiftXLS(f, line, ts.size, ts.align, letterSpacing);
+
+    for (let i = 0; i < glyphs.length; i += 1) {
+      const g = glyphs[i];
+      const path = g.getPath(x, y, ts.size);
+      const b = path.getBoundingBox();
+      xMin = Math.min(xMin, b.x1 - pad);
+      yMin = Math.min(yMin, b.y1 - pad);
+      xMax = Math.max(xMax, b.x2 + pad);
+      yMax = Math.max(yMax, b.y2 + pad);
+
+      let adv = (g.advanceWidth || 0) * scale;
+      if (i < glyphs.length - 1) {
+        adv += (f.getKerningValue(g, glyphs[i + 1]) || 0) * scale;
+        adv += letterSpacing;
+      }
+      x += adv;
+    }
+
     y += ts.size * ts.lineHeight;
   }
+
   if (!isFinite(xMin)) return null;
   return { x: xMin, y: yMin, w: xMax - xMin, h: yMax - yMin };
 }
