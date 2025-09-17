@@ -17,7 +17,7 @@ import { StrokeWidth } from "../StrokeWidth";
 import { Radius } from "../Radius";
 import { IconButton } from "../IconButton";
 import ToolsContainer from "../ToolsContainer";
-import { getPolyBounds, isNear } from "../../utils/polygonUtils";
+import { getPolyBounds, getPolyRawBounds, isNear } from "../../utils/polygonUtils";
 import { translateStroke } from "./strokeTransforms";
 import { drawPoly, drawPolySelectionOverlay, hitPoly } from "./polyStroke";
 
@@ -1670,6 +1670,41 @@ export default function TextToSVG() {
           pushBounds(x - pad, y - pad, x + w + pad, y + h + pad);
         }
       }
+      if (s.type === "poly") {
+        const pts = s.points.filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        if (!pts.length) continue;
+        const strokePad = (s.strokeWidth || 0) / 2 + AA_MARGIN;
+
+        const angle = s.rotation || 0;
+        if (angle) {
+          const raw = getPolyRawBounds(s);
+          const cx = raw ? raw.x + raw.w / 2 : pts[0].x;
+          const cy = raw ? raw.y + raw.h / 2 : pts[0].y;
+          const cos = Math.cos(angle);
+          const sin = Math.sin(angle);
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const p of pts) {
+            const dx = p.x - cx;
+            const dy = p.y - cy;
+            const rx = cx + dx * cos - dy * sin;
+            const ry = cy + dx * sin + dy * cos;
+            if (rx < minX) minX = rx;
+            if (ry < minY) minY = ry;
+            if (rx > maxX) maxX = rx;
+            if (ry > maxY) maxY = ry;
+          }
+          pushBounds(minX - strokePad, minY - strokePad, maxX + strokePad, maxY + strokePad);
+        } else {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const p of pts) {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+          }
+          pushBounds(minX - strokePad, minY - strokePad, maxX + strokePad, maxY + strokePad);
+        }
+      }
     }
 
     if (!isFinite(xMin) || !isFinite(yMin) || !isFinite(xMax) || !isFinite(yMax)) {
@@ -1850,16 +1885,24 @@ export default function TextToSVG() {
       }
 
       if (s.type === "poly") {
-        const pts = s.points.map(p => `${p.x},${p.y}`).join(" ");
-        const cx = (getPolyBounds(s)!.x + getPolyBounds(s)!.w/2);
-        const cy = (getPolyBounds(s)!.y + getPolyBounds(s)!.h/2);
-        const rot = s.rotation ? ` rotate(${(s.rotation*180/Math.PI).toFixed(3)} ${cx} ${cy})` : "";
-        const common = `fill="${s.closed && s.fill!=="none" ? s.fill : "none"}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" stroke-linejoin="${s.lineJoin||"round"}" stroke-linecap="${s.lineCap||"round"}"`;
+        const pts = s.points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+        if (pts.length < 2) continue;
+        const pointsAttr = pts.map(p => `${p.x},${p.y}`).join(" ");
+        const bounds = getPolyBounds(s);
+        const rotationAttr = (() => {
+          if (!s.rotation) return "";
+          if (!bounds) return "";
+          const cx = bounds.x + bounds.w / 2;
+          const cy = bounds.y + bounds.h / 2;
+          return ` transform="rotate(${(s.rotation * 180 / Math.PI).toFixed(3)} ${cx.toFixed(3)} ${cy.toFixed(3)})"`;
+        })();
+        const fillAttr = s.closed && s.fill !== "none" ? s.fill : "none";
+        const common = `fill="${fillAttr}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" stroke-linejoin="${s.lineJoin || "round"}" stroke-linecap="${s.lineCap || "round"}"`;
+        const tag = s.closed ? "polygon" : "polyline";
         contentEls.push(
-          s.closed
-            ? `<g${maskAttr} transform="${T}"><polygon points="${pts}" ${common}${rot && ""}/></g>`
-            : `<g${maskAttr} transform="${T}"><polyline points="${pts}" ${common}${rot && ""}/></g>`
+          `<g${maskAttr}><${tag} points="${pointsAttr}" ${common}${rotationAttr}/></g>`
         );
+        continue;
       }
 
     }
