@@ -1,4 +1,4 @@
-export type Tool = "select" | "text" | "pen" | "eraser" | "shape";
+export type Tool = "select" | "text" | "pen" | "eraser" | "shape" | "poly";
 export type Pt = { x: number; y: number };
 
 export type Base = {
@@ -68,7 +68,19 @@ export type ShapeStroke = Base & {
   rx?: number;            // radio esquinas (solo rect)
 };
 
-export type Stroke = PenStroke | EraserStroke | TextStroke | SvgStroke | ShapeStroke;
+export type PolyStroke = Base & {
+  type: "poly";
+  points: {x:number; y:number}[];   // coordenadas absolutas
+  closed: boolean;                   // true = polígono, false = polilínea
+  fill: string;                      // "none" o color
+  stroke: string;
+  strokeWidth: number;
+  lineJoin?: CanvasLineJoin;         // "miter"|"round"|"bevel"
+  lineCap?: CanvasLineCap;           // para polilínea
+  rotation?: number;                 // rad (opcional)
+};
+
+export type Stroke = PenStroke | EraserStroke | TextStroke | SvgStroke | ShapeStroke | PolyStroke;
 export type StrokeType = Stroke["type"];
 export type Handle = "nw" | "ne" | "sw" | "se";
 export type FontGoogle = [string, string];

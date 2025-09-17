@@ -2,21 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from 'sonner'
 import opentype, { Font } from "opentype.js";
 import KCmdKModal from "../KCmdModal";
-import { CircleIcon, CursorIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, SortAmountDownIcon, SortAmountUpIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
+import { CircleIcon, CursorIcon, DownloadIcon, ErraserIcon, EyeClosedIcon, EyeOpenIcon, FileSVGIcon, FlipBackwardsIcon, ImagePlusIcon, Label, LayerDownIcon, LayerIcon, LayerUpIcon, LineIcon, LockClosedIcon, LockOpenIcon, PaintBrushIcon, PolygonIcon, SortAmountDownIcon, SortAmountUpIcon, SquareIcon, TextIcon, TrashIcon } from "../ui";
 import { Drawer } from "vaul";
 import ClassicMenuBar, { type Menu } from "../ClassicMenuBar";
 import { BrushSizeSelect } from "../BrushSizeSelect";
-import type { Tool, Pt, PenStroke, EraserStroke, TextStroke, SvgStroke, Stroke, Handle, FontGoogle, ShapeKind, ShapeStroke, StrokeType, Doc, EmbeddedFonts } from "../../types/strokes";
+import type { Tool, Pt, PenStroke, EraserStroke, TextStroke, SvgStroke, Stroke, Handle, FontGoogle, ShapeKind, ShapeStroke, StrokeType, Doc, EmbeddedFonts, PolyStroke } from "../../types/strokes";
 import { ensureFont, ensureFontAsync, listFonts } from "../../utils/fontUtils";
 import { isFontFile, isSvgFile } from "../../utils/fileUtils";
 import { extractSvgInner, parseSVGMeta } from "../../utils/svgUtils";
 import { getCanvasPos, withRotation } from "../../utils/canvasUtils";
-import { alignShiftX, alignShiftXLS, boundsWithFont, degToRad, fileToDataURL, getMaxZ, normalizeZ, pointInRotatedRect, radToDeg, unrotatePoint } from "../../utils/helpers";
+import { alignShiftX, alignShiftXLS, boundsWithFont, degToRad, fileToDataURL, getMaxZ, normalizeZ, radToDeg, unrotatePoint } from "../../utils/helpers";
 import { FillPicker } from "../FillPicker";
 import { StrokeWidth } from "../StrokeWidth";
 import { Radius } from "../Radius";
 import { IconButton } from "../IconButton";
 import ToolsContainer from "../ToolsContainer";
+import { getPolyBounds, isNear } from "../../utils/polygonUtils";
+import { translateStroke } from "./strokeTransforms";
+import { drawPoly, drawPolySelectionOverlay, hitPoly } from "./polyStroke";
 
 const AA_MARGIN = 1; // 1px de seguridad contra antialias/decimales
 
@@ -68,11 +71,15 @@ export default function TextToSVG() {
   const [shapeRadius, setShapeRadius] = useState<number>(12); // rect redondeado
   const creatingShapeRef = useRef<ShapeStroke | null>(null);
 
+  // Polygon
+  const polyDraftRef = useRef<{ id: string; committed: number } | null>(null);
+  // <-- tolerancia para cerrar tocando el primer punto
+  const CLOSE_TOL = 8;
+
   // util
   const isBreak = (p: Pt) => !Number.isFinite(p.x) || !Number.isFinite(p.y);
   const BREAK: Pt = { x: Number.NaN, y: Number.NaN };
   const currentPenIdRef = useRef<string | null>(null);
-
 
   // Documento
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -144,7 +151,10 @@ export default function TextToSVG() {
   }, []);
 
   // si cambias de herramienta o de estilo, “cierra” el pen activo
-  useEffect(() => { if (tool !== "pen") currentPenIdRef.current = null; }, [tool]);
+  useEffect(() => {
+    if (tool !== "pen") currentPenIdRef.current = null;
+    if (tool !== "poly") polyDraftRef.current = null;
+  }, [tool]);
   // si cambias color/tamaño, empezará un stroke nuevo
   useEffect(() => { currentPenIdRef.current = null; }, [penColor, penSize]);
 
@@ -408,6 +418,7 @@ export default function TextToSVG() {
       offctx.globalCompositeOperation = "source-over";
       if (s.type === "pen")      drawPen(offctx, s);
       else if (s.type === "shape") drawShape(offctx, s as ShapeStroke);
+      else if (s.type === "poly") drawPoly(offctx, s as PolyStroke);
       else if (s.type === "svg")   drawSVG(offctx, s as SvgStroke);
       else if (s.type === "text")  drawText(offctx, s as TextStroke);
       offctx.restore();
@@ -446,20 +457,28 @@ export default function TextToSVG() {
     if (selectedIds.length) {
       const dpr = window.devicePixelRatio || 1;
       ctx.save();
-      ctx.strokeStyle = "#0af";
-      ctx.setLineDash([4, 4]);
       for (const id of selectedIds) {
         const st = strokes.find(st => st.id === id);
         if (!st) continue;
         const b = getStrokeBounds(st);
         if (!b) continue;
-        const cx = b.x + b.w/2, cy = b.y + b.h/2;
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
+        const angle = (st.type === "text" || st.type === "svg" || st.type === "poly") ? st.rotation ?? 0 : 0;
 
-        withRotation(ctx, (st.type === "text" || st.type === "svg") ? st.rotation ?? 0 : 0, cx, cy, () => {
-          // caja
+        withRotation(ctx, angle, cx, cy, () => {
+          ctx.save();
+          ctx.strokeStyle = "#0af";
+          ctx.setLineDash([4, 4]);
           ctx.strokeRect(b.x, b.y, b.w, b.h);
-          // handles
+          ctx.restore();
+
+          if (st.type === "poly") {
+            drawPolySelectionOverlay(ctx, st as PolyStroke, { color: "#0af", dpr });
+          }
+
           const hs = handleRects(b, dpr);
+          ctx.save();
           ctx.setLineDash([]);
           ctx.fillStyle = "#fff";
           ctx.strokeStyle = "#0af";
@@ -467,7 +486,8 @@ export default function TextToSVG() {
             ctx.fillRect(h.x, h.y, h.w, h.h);
             ctx.strokeRect(h.x, h.y, h.w, h.h);
           }
-        })
+          ctx.restore();
+        });
       }
       ctx.restore();
     }
@@ -608,8 +628,6 @@ export default function TextToSVG() {
 
   }
 
-
-
   // ==== Bounds aproximados ====
   function getStrokeBounds(s: Stroke): { x: number; y: number; w: number; h: number } | null | undefined {
     if (s.type === "pen" || s.type === "eraser") {
@@ -681,6 +699,8 @@ export default function TextToSVG() {
 
       if (!Number.isFinite(xMin)) return null;
       return { x: xMin, y: yMin, w: xMax - xMin, h: yMax - yMin };
+    } else if (s.type === "poly") {
+      return getPolyBounds(s);
     }
   }
 
@@ -737,6 +757,9 @@ export default function TextToSVG() {
         const w = s.iw * s.scale;
         const h = s.ih * s.scale;
         if (pt.x >= s.x && pt.x <= s.x + w && pt.y >= s.y && pt.y <= s.y + h) return s.id;
+      } else if (s.type === "poly") {
+        if (hitPoly(pt, s as PolyStroke)) return s.id;
+        continue;
       } else {
         if (s.points.length < 2) continue;
         let d = `M ${s.points[0].x} ${s.points[0].y}`;
@@ -749,16 +772,16 @@ export default function TextToSVG() {
     return null;
   }
 
-  function isHitSelect(px:number, py:number, st: Stroke){
-    const b = getStrokeBounds(st);
-    if (!b) return false;
+  // function isHitSelect(px:number, py:number, st: Stroke){
+  //   const b = getStrokeBounds(st);
+  //   if (!b) return false;
 
-    const angle = (st.type === "text" || st.type === "svg") ? (st.rotation || 0) : 0;
-    const cx = b.x + b.w/2, cy = b.y + b.h/2;
-    const HIT_PAD = 4; // margen de clic tolerante
+  //   const angle = (st.type === "text" || st.type === "svg") ? (st.rotation || 0) : 0;
+  //   const cx = b.x + b.w/2, cy = b.y + b.h/2;
+  //   const HIT_PAD = 4; // margen de clic tolerante
 
-    return pointInRotatedRect(px, py, b, angle, cx, cy, HIT_PAD);
-  }
+  //   return pointInRotatedRect(px, py, b, angle, cx, cy, HIT_PAD);
+  // }
 
   // ==== Interacción ====
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
@@ -784,6 +807,77 @@ export default function TextToSVG() {
       };
       creatingShapeRef.current = s;
       setStrokes(prev => [...prev, s]);
+      setSelectedIds([s.id]);
+      drawPreview();
+      return;
+    }
+
+    if (tool === "poly") {
+      const arr = [...strokes];
+      const draft = polyDraftRef.current;
+
+      // Doble click para cerrar (si está dibujando)
+      if (e.detail >= 2 && draft) {                    // <-- doble click
+        const s = arr.find(st => st.id === draft.id) as PolyStroke | undefined;
+        if (s && s.points.length >= 3) {
+          s.closed = true;                             // <-- cierra
+          // elimina el punto “ephemeral” (último duplicado)
+          if (s.points.length >= draft.committed + 1) s.points.pop();
+          polyDraftRef.current = null;
+          setStrokes(arr);
+          setSelectedIds([s.id]);
+          drawPreview();
+          return;
+        }
+      }
+
+      // Si ya hay un polígono en curso
+      if (draft) {
+        const s = arr.find(st => st.id === draft.id) as PolyStroke | undefined;
+        if (!s) { polyDraftRef.current = null; return; }
+
+        // Cerrar tocando el primer punto
+        const first = s.points[0];
+        if (first && isNear(p, first, CLOSE_TOL)) {    // <-- clic cerca del primero
+          if (s.points.length >= 3) {
+            s.points.pop();                            // quita el ephemeral
+            s.closed = true;                           // cierra
+            polyDraftRef.current = null;
+            setStrokes(arr);
+            setSelectedIds([s.id]);
+            drawPreview();
+          }
+          return;
+        }
+
+        // Commit del punto actual (convierte el “ephemeral” en fijo y añade otro ephemeral)
+        s.points[s.points.length - 1] = p;             // <-- fija el actual
+        s.points.push(p);                               // <-- agrega ephemeral nuevo
+        polyDraftRef.current = { id: s.id, committed: draft.committed + 1 };
+        setStrokes(arr);
+        drawPreview();
+        return;
+      }
+
+      // No hay polígono activo: crea uno nuevo con [p, p] (el 2° es “ephemeral”)
+      const s: PolyStroke = {
+        id: uid(),
+        type: "poly",
+        z: getMaxZ(arr) + 1,
+        visible: true,
+        locked: false,
+        points: [p, p],                                // <-- 2º punto es temporal
+        closed: false,
+        fill: shapeHasFill ? shapeFill : "none",
+        stroke: shapeStroke,
+        strokeWidth: shapeStrokeWidth,
+        lineJoin: "round",
+        lineCap: "round",
+        rotation: 0,
+      };
+      arr.push(s);
+      polyDraftRef.current = { id: s.id, committed: 1 };
+      setStrokes(arr);
       setSelectedIds([s.id]);
       drawPreview();
       return;
@@ -1136,19 +1230,7 @@ export default function TextToSVG() {
 
     setStrokes(prev => prev.map(s => {
       if (s.id !== d.id || s.locked) return s;
-
-      // objetos con x/y: text, svg, shape
-      if (s.type === "text" || s.type === "svg" || s.type === "shape") {
-        return { ...s, x: s.x + dx, y: s.y + dy };
-      }
-
-      // polilíneas: pen / eraser
-      if (s.type === "pen" || s.type === "eraser") {
-        const pts = s.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
-        return { ...s, points: pts };
-      }
-
-      return s;
+      return translateStroke(s, dx, dy);
     }));
 
     draggingRef.current = { ...d, last: p };
@@ -1330,6 +1412,25 @@ export default function TextToSVG() {
       window.removeEventListener("drop", onWindowDrop);
       window.removeEventListener("dragend", onWindowDragEnd);
     };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Enter") return;
+      const d = polyDraftRef.current; if (!d) return;
+      setStrokes(prev => {
+        const arr = [...prev];
+        const s = arr.find(st => st.id === d.id) as PolyStroke | undefined;
+        if (s && s.points.length >= 3) {
+          s.points.pop(); s.closed = true;
+          polyDraftRef.current = null;
+        }
+        return arr;
+      });
+      drawPreview();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   
@@ -1747,6 +1848,20 @@ export default function TextToSVG() {
         }
         continue;
       }
+
+      if (s.type === "poly") {
+        const pts = s.points.map(p => `${p.x},${p.y}`).join(" ");
+        const cx = (getPolyBounds(s)!.x + getPolyBounds(s)!.w/2);
+        const cy = (getPolyBounds(s)!.y + getPolyBounds(s)!.h/2);
+        const rot = s.rotation ? ` rotate(${(s.rotation*180/Math.PI).toFixed(3)} ${cx} ${cy})` : "";
+        const common = `fill="${s.closed && s.fill!=="none" ? s.fill : "none"}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" stroke-linejoin="${s.lineJoin||"round"}" stroke-linecap="${s.lineCap||"round"}"`;
+        contentEls.push(
+          s.closed
+            ? `<g${maskAttr} transform="${T}"><polygon points="${pts}" ${common}${rot && ""}/></g>`
+            : `<g${maskAttr} transform="${T}"><polyline points="${pts}" ${common}${rot && ""}/></g>`
+        );
+      }
+
     }
 
     // ---- SVG final
@@ -1929,12 +2044,12 @@ export default function TextToSVG() {
                   <Label>Interlineado</Label>
                   <input
                     type="number"
-                    step="0.25"
+                    step="1"
                     className="w-full h-10 p-2 rounded-lg border border-neutral-300"
                     min={0}
                     max={30}
                     value={(isSelectedType(["text"]) as TextStroke)?.letterSpacing || letterSpacing}
-                    onChange={(e) => updateSelectedPatch(+e.target.value || 1.2, setLetterSpacing, { 
+                    onChange={(e) => updateSelectedPatch(+e.target.value || 0, setLetterSpacing, { 
                       types: ["text"],
                       patch: (_s, v) => ({ letterSpacing: v }),
                     })}
@@ -2367,6 +2482,13 @@ export default function TextToSVG() {
             {shapeKind === "rect" ? <SquareIcon className="size-4 md:size-8" />
               : shapeKind === "ellipse" ? <CircleIcon className="size-4 md:size-8" />
               : shapeKind === "line" ? <LineIcon className="size-4 md:size-8" /> : null}
+          </button>
+          <button
+            type="button"
+            className={`px-3 py-2 rounded-lg ${tool === "poly" ? "bg-neutral-900 text-white" : "bg-neutral-200 text-neutral-800"}`}
+            onClick={() => setTool("poly")}
+          >
+            <PolygonIcon className="size-4 md:size-8" />
           </button>
           <button
             type="button"
